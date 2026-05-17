@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>D&D Battle Table</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app" data-theme="ember">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">D20</div>
+          <div>
+            <h1>D&D Battle Table</h1>
+            <p id="autosaveStatus">Автосохранение включено</p>
+          </div>
+        </div>
+
+        <div class="top-actions" aria-label="Действия сцены">
+          <button class="ghost-button" id="exportSceneBtn" type="button">Экспорт</button>
+          <label class="ghost-button file-button">
+            Импорт
+            <input id="importSceneInput" type="file" accept="application/json" />
+          </label>
+          <button class="danger-button" id="resetSceneBtn" type="button">Сброс</button>
+        </div>
+      </header>
+
+      <main class="layout">
+        <aside class="sidebar left-tools" aria-label="Инструменты карты">
+          <section class="panel online-panel">
+            <div class="panel-heading">
+              <h2>Онлайн</h2>
+              <span class="status-pill offline" id="onlineStatus">Офлайн</span>
+            </div>
+            <div class="field-grid">
+              <label>
+                <span>Комната</span>
+                <input id="roomInput" type="text" value="main" maxlength="48" />
+              </label>
+            </div>
+            <div class="button-row">
+              <button id="joinRoomBtn" type="button">Войти</button>
+              <button id="copyInviteBtn" type="button">Ссылка</button>
+            </div>
+            <p class="online-hint" id="onlineHint">Открой через сервер, чтобы играть вместе.</p>
+            <p class="online-hint" id="connectedCount">Игроков: 1</p>
+          </section>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <h2>Карта</h2>
+              <button class="mini-button" id="newMapBtn" type="button">Создать</button>
+            </div>
+            <div class="field-grid two">
+              <label>
+                <span>Колонки</span>
+                <input id="colsInput" type="number" min="8" max="80" value="24" />
+              </label>
+              <label>
+                <span>Ряды</span>
+                <input id="rowsInput" type="number" min="8" max="60" value="16" />
+              </label>
+              <label>
+                <span>Клетка</span>
+                <input id="cellInput" type="number" min="28" max="80" value="42" />
+              </label>
+              <label>
+                <span>Масштаб</span>
+                <input id="zoomInput" type="range" min="60" max="140" value="100" />
+              </label>
+            </div>
+            <label class="checkbox-row">
+              <input id="gridToggle" type="checkbox" checked />
+              <span>Сетка</span>
+            </label>
+          </section>
+
+          <section class="panel">
+            <h2>Инструмент</h2>
+            <div class="tool-grid" role="group" aria-label="Инструменты поля">
+              <button class="tool-button active" data-tool="paint" type="button" title="Рисовать">
+                <span class="tool-icon brush-icon"></span>
+                <span>Кисть</span>
+              </button>
+              <button class="tool-button" data-tool="erase" type="button" title="Стереть">
+                <span class="tool-icon erase-icon"></span>
+                <span>Ластик</span>
+              </button>
+              <button class="tool-button" data-tool="token" type="button" title="Фигурки">
+                <span class="tool-icon token-icon"></span>
+                <span>Фигурки</span>
+              </button>
+              <button class="tool-button" data-tool="image" type="button" title="Картинки">
+                <span class="tool-icon image-icon"></span>
+                <span>Картинки</span>
+              </button>
+              <button class="tool-button" data-tool="select" type="button" title="Выбор">
+                <span class="tool-icon select-icon"></span>
+                <span>Выбор</span>
+              </button>
+            </div>
+
+            <div class="paint-controls">
+              <label>
+                <span>Цвет</span>
+                <input id="brushColorInput" type="color" value="#6f8f53" />
+              </label>
+              <div class="swatches" aria-label="Цвета кисти">
+                <button class="swatch active" style="--swatch: #6f8f53" data-color="#6f8f53" type="button" title="Трава"></button>
+                <button class="swatch" style="--swatch: #9c7a48" data-color="#9c7a48" type="button" title="Земля"></button>
+                <button class="swatch" style="--swatch: #496f83" data-color="#496f83" type="button" title="Вода"></button>
+                <button class="swatch" style="--swatch: #8b8d89" data-color="#8b8d89" type="button" title="Камень"></button>
+                <button class="swatch" style="--swatch: #b65345" data-color="#b65345" type="button" title="Опасность"></button>
+                <button class="swatch" style="--swatch: #c6a64d" data-color="#c6a64d" type="button" title="Свет"></button>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>Сцена</h2>
+            <div class="field-grid">
+              <label>
+                <span>Название</span>
+                <input id="sceneNameInput" type="text" value="Засада у старой дороги" maxlength="40" />
+              </label>
+            </div>
+            <div class="button-row">
+              <button id="clearPaintBtn" type="button">Очистить краску</button>
+              <button id="clearTokensBtn" type="button">Убрать фигуры</button>
+            </div>
+          </section>
+        </aside>
+
+        <section class="battle-area" aria-label="Поле битвы">
+          <div class="battle-header">
+            <div>
+              <h2 id="sceneTitle">Засада у старой дороги</h2>
+              <p id="sceneMeta">24 x 16 клеток</p>
+            </div>
+            <div class="mode-chip" id="modeChip">Кисть</div>
+          </div>
+          <div class="canvas-shell" id="canvasShell">
+            <canvas id="battleCanvas" aria-label="Карта боя"></canvas>
+          </div>
+        </section>
+
+        <aside class="sidebar right-tools" aria-label="Панели партии">
+          <section class="panel">
+            <div class="panel-heading">
+              <h2>Фигурки</h2>
+              <label class="icon-file-button" title="Добавить изображение фигурки">
+                +
+                <input id="tokenImageInput" type="file" accept="image/*" multiple />
+              </label>
+            </div>
+            <div class="field-grid two">
+              <label>
+                <span>Имя</span>
+                <input id="tokenNameInput" type="text" placeholder="Гоблин, паладин..." maxlength="24" />
+              </label>
+              <label>
+                <span>Размер</span>
+                <input id="tokenSizeInput" type="number" min="1" max="6" value="1" />
+              </label>
+            </div>
+            <div class="asset-list" id="tokenAssets"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <h2>Картинки</h2>
+              <label class="icon-file-button" title="Добавить картинку">
+                +
+                <input id="handoutImageInput" type="file" accept="image/*" multiple />
+              </label>
+            </div>
+            <div class="field-grid two">
+              <label>
+                <span>Ширина</span>
+                <input id="handoutWidthInput" type="number" min="2" max="16" value="5" />
+              </label>
+              <label>
+                <span>Высота</span>
+                <input id="handoutHeightInput" type="number" min="2" max="16" value="4" />
+              </label>
+            </div>
+            <div class="asset-list" id="handoutAssets"></div>
+          </section>
+
+          <section class="panel">
+            <h2>Музыка</h2>
+            <div class="field-grid">
+              <label>
+                <span>Ссылка MP3/OGG</span>
+                <input id="musicUrlInput" type="url" placeholder="https://..." />
+              </label>
+              <label>
+                <span>Название</span>
+                <input id="musicNameInput" type="text" placeholder="Тема боя" maxlength="40" />
+              </label>
+            </div>
+            <div class="button-row">
+              <button id="addMusicUrlBtn" type="button">Добавить URL</button>
+              <label class="ghost-button file-button">
+                Файл
+                <input id="musicFileInput" type="file" accept="audio/*" multiple />
+              </label>
+            </div>
+            <audio id="audioPlayer" controls loop></audio>
+            <div class="music-list" id="musicList"></div>
+          </section>
+
+          <section class="panel dice-panel">
+            <h2>Дайсы</h2>
+            <div class="dice-grid" aria-label="Быстрые броски">
+              <button data-dice="d4" type="button">d4</button>
+              <button data-dice="d6" type="button">d6</button>
+              <button data-dice="d8" type="button">d8</button>
+              <button data-dice="d10" type="button">d10</button>
+              <button data-dice="d12" type="button">d12</button>
+              <button data-dice="d20" type="button">d20</button>
+              <button data-dice="d100" type="button">d100</button>
+            </div>
+            <div class="roll-line">
+              <input id="diceFormulaInput" type="text" value="1d20+3" aria-label="Формула броска" />
+              <button id="rollFormulaBtn" type="button">Бросить</button>
+            </div>
+            <div class="button-row">
+              <button id="rollAdvBtn" type="button">Преимущество</button>
+              <button id="rollDisBtn" type="button">Помеха</button>
+            </div>
+            <ol class="roll-log" id="rollLog" aria-live="polite"></ol>
+          </section>
+        </aside>
+      </main>
+
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
