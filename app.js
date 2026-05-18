@@ -1,6 +1,14 @@
 const STORAGE_KEY = "dnd-battle-table-v1";
 const CLIENT_KEY = "dnd-battle-table-client-id";
 const ROOM_KEY = "dnd-battle-table-room";
+const MAP_LIMITS = {
+  minCols: 8,
+  maxCols: 160,
+  minRows: 8,
+  maxRows: 160,
+  minCell: 16,
+  maxCell: 160,
+};
 
 const canvas = document.querySelector("#battleCanvas");
 const ctx = canvas.getContext("2d");
@@ -224,6 +232,36 @@ function applySceneToState(target, scene) {
   target.tokens = structuredClone(scene.tokens || []);
   target.handouts = structuredClone(scene.handouts || []);
   target.selectedObject = null;
+}
+
+function backgroundSize() {
+  const width = Number(state.background?.width || state.background?.naturalWidth || 0);
+  const height = Number(state.background?.height || state.background?.naturalHeight || 0);
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
+function fitGridToBackground() {
+  const size = backgroundSize();
+  if (!size) return false;
+  state.cols = clamp(Math.round(size.width / state.cell), MAP_LIMITS.minCols, MAP_LIMITS.maxCols);
+  state.rows = clamp(Math.round(size.height / state.cell), MAP_LIMITS.minRows, MAP_LIMITS.maxRows);
+  clampObjectsToMap();
+  return true;
+}
+
+function clampObjectsToMap() {
+  state.tokens.forEach((token) => {
+    token.x = clamp(token.x, 0, Math.max(0, state.cols - token.size));
+    token.y = clamp(token.y, 0, Math.max(0, state.rows - token.size));
+  });
+  state.handouts.forEach((handout) => {
+    handout.x = clamp(handout.x, 0, Math.max(0, state.cols - handout.w));
+    handout.y = clamp(handout.y, 0, Math.max(0, state.rows - handout.h));
+  });
+  Object.keys(state.terrain).forEach((key) => {
+    const [x, y] = key.split(",").map(Number);
+    if (x >= state.cols || y >= state.rows) delete state.terrain[key];
+  });
 }
 
 function loadState() {
@@ -500,7 +538,7 @@ function drawBase(width, height) {
 
   const background = state.background?.src ? getImage(state.background.src) : null;
   if (background?.complete && background.naturalWidth) {
-    drawCoverImage(background, 0, 0, width, height);
+    ctx.drawImage(background, 0, 0, width, height);
     ctx.fillStyle = "rgba(0, 0, 0, 0.12)";
     ctx.fillRect(0, 0, width, height);
   } else {
@@ -733,8 +771,8 @@ function placeToken(point) {
     assetId: asset.id,
     name: els.tokenNameInput.value.trim() || asset.name.replace(/\.[^.]+$/, ""),
     size,
-    x: clamp(point.cellX, 0, state.cols - size),
-    y: clamp(point.cellY, 0, state.rows - size),
+    x: clamp(point.cellX, 0, Math.max(0, state.cols - size)),
+    y: clamp(point.cellY, 0, Math.max(0, state.rows - size)),
   };
   state.tokens.push(token);
   selectObject("token", token);
@@ -752,8 +790,8 @@ function placeHandout(point) {
   const handout = {
     id: uid("handout"),
     assetId: asset.id,
-    x: clamp(point.cellX, 0, state.cols - w),
-    y: clamp(point.cellY, 0, state.rows - h),
+    x: clamp(point.cellX, 0, Math.max(0, state.cols - w)),
+    y: clamp(point.cellY, 0, Math.max(0, state.rows - h)),
     w,
     h,
   };
@@ -789,8 +827,8 @@ function moveDrag(point) {
   } else {
     const w = object.size || object.w;
     const h = object.size || object.h;
-    object.x = clamp(point.cellX - drag.offsetX, 0, state.cols - w);
-    object.y = clamp(point.cellY - drag.offsetY, 0, state.rows - h);
+    object.x = clamp(point.cellX - drag.offsetX, 0, Math.max(0, state.cols - w));
+    object.y = clamp(point.cellY - drag.offsetY, 0, Math.max(0, state.rows - h));
   }
   renderCanvas();
 }
@@ -979,14 +1017,32 @@ els.mapBackgroundInput.addEventListener("change", (event) => {
   if (!file || !file.type.startsWith("image/")) return;
   const reader = new FileReader();
   reader.onload = () => {
-    state.background = {
-      id: uid("background"),
-      name: file.name,
-      src: reader.result,
+    const src = reader.result;
+    const img = new Image();
+    img.onload = () => {
+      state.background = {
+        id: uid("background"),
+        name: file.name,
+        src,
+        width: img.naturalWidth,
+        height: img.naturalHeight,
+      };
+      fitGridToBackground();
+      imageCache = new Map();
+      renderAll();
+      showToast("Фон карты добавлен, сетка подстроена под картинку.");
     };
-    imageCache = new Map();
-    renderAll();
-    showToast("Фон карты добавлен.");
+    img.onerror = () => {
+      state.background = {
+        id: uid("background"),
+        name: file.name,
+        src,
+      };
+      imageCache = new Map();
+      renderAll();
+      showToast("Фон карты добавлен.");
+    };
+    img.src = src;
   };
   reader.readAsDataURL(file);
   event.target.value = "";
@@ -1256,26 +1312,25 @@ els.zoomInput.addEventListener("input", (event) => {
 });
 
 function applyMapInputs() {
-  state.cols = clamp(Number(els.colsInput.value) || state.cols, 8, 80);
-  state.rows = clamp(Number(els.rowsInput.value) || state.rows, 8, 60);
-  state.cell = clamp(Number(els.cellInput.value) || state.cell, 28, 80);
-  state.tokens.forEach((token) => {
-    token.x = clamp(token.x, 0, state.cols - token.size);
-    token.y = clamp(token.y, 0, state.rows - token.size);
-  });
-  state.handouts.forEach((handout) => {
-    handout.x = clamp(handout.x, 0, state.cols - handout.w);
-    handout.y = clamp(handout.y, 0, state.rows - handout.h);
-  });
-  Object.keys(state.terrain).forEach((key) => {
-    const [x, y] = key.split(",").map(Number);
-    if (x >= state.cols || y >= state.rows) delete state.terrain[key];
-  });
+  state.cols = clamp(Number(els.colsInput.value) || state.cols, MAP_LIMITS.minCols, MAP_LIMITS.maxCols);
+  state.rows = clamp(Number(els.rowsInput.value) || state.rows, MAP_LIMITS.minRows, MAP_LIMITS.maxRows);
+  state.cell = clamp(Number(els.cellInput.value) || state.cell, MAP_LIMITS.minCell, MAP_LIMITS.maxCell);
+  clampObjectsToMap();
   renderAll();
 }
 
-["colsInput", "rowsInput", "cellInput"].forEach((id) => {
+["colsInput", "rowsInput"].forEach((id) => {
   els[id].addEventListener("change", applyMapInputs);
+});
+
+els.cellInput.addEventListener("change", () => {
+  state.cell = clamp(Number(els.cellInput.value) || state.cell, MAP_LIMITS.minCell, MAP_LIMITS.maxCell);
+  if (fitGridToBackground()) {
+    renderAll();
+    showToast("Размер клетки изменён, ряды и колонки пересчитаны по фону.");
+  } else {
+    applyMapInputs();
+  }
 });
 
 document.querySelector("#newMapBtn").addEventListener("click", () => {
