@@ -138,6 +138,16 @@ let pingAnimationTimer = null;
 const undoStack = [];
 const UNDO_LIMIT = 20;
 const PING_DURATION = 1600;
+const TEMPLATE_COVERAGE_THRESHOLD = 0.5;
+const TEMPLATE_COVERAGE_SAMPLES = 9;
+const TEMPLATE_CONE_SPREAD = Math.PI / 6;
+const initiativeSides = ["red", "blue", "gray", "green"];
+const initiativeSideLabels = {
+  red: "Красная команда",
+  blue: "Синяя команда",
+  gray: "Серая команда",
+  green: "Зеленая команда",
+};
 
 const sync = {
   online: location.protocol === "http:" || location.protocol === "https:",
@@ -336,7 +346,13 @@ function tokenDisplayName(token) {
 }
 
 function initiativeSide(value) {
-  return ["ally", "enemy", "neutral"].includes(value) ? value : "neutral";
+  const legacySides = {
+    enemy: "red",
+    ally: "blue",
+    neutral: "gray",
+  };
+  const nextValue = legacySides[value] || value;
+  return initiativeSides.includes(nextValue) ? nextValue : "gray";
 }
 
 function normalizeInitiative(target = state) {
@@ -377,10 +393,8 @@ function initiativeGroupRange() {
   let start = activeIndex;
   let end = activeIndex;
 
-  if (active.side !== "neutral") {
-    while (start > 0 && state.initiative[start - 1].side === active.side) start -= 1;
-    while (end < state.initiative.length - 1 && state.initiative[end + 1].side === active.side) end += 1;
-  }
+  while (start > 0 && state.initiative[start - 1].side === active.side) start -= 1;
+  while (end < state.initiative.length - 1 && state.initiative[end + 1].side === active.side) end += 1;
 
   return { start, end };
 }
@@ -946,21 +960,28 @@ function drawPings() {
       const progress = clamp(age / PING_DURATION, 0, 1);
       const x = ping.x * state.cell + state.cell / 2;
       const y = ping.y * state.cell + state.cell / 2;
-      const radius = state.cell * (0.38 + progress * 0.9);
-      const alpha = 1 - progress;
+      const radius = state.cell * (0.28 + progress * 0.55);
+      const alpha = clamp(1 - progress, 0, 1);
+      const coreAlpha = clamp(1 - progress * 0.55, 0, 1);
 
       ctx.save();
-      ctx.strokeStyle = `rgba(255, 218, 112, ${alpha})`;
-      ctx.fillStyle = `rgba(209, 168, 80, ${alpha * 0.2})`;
-      ctx.lineWidth = screenPx(3);
+      ctx.shadowBlur = screenPx(14);
+      ctx.shadowColor = `rgba(255, 218, 92, ${alpha * 0.85})`;
+      ctx.strokeStyle = `rgba(255, 231, 126, ${alpha})`;
+      ctx.fillStyle = `rgba(255, 192, 67, ${alpha * 0.28})`;
+      ctx.lineWidth = screenPx(3.5);
       ctx.beginPath();
       ctx.arc(x, y, radius, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
+      ctx.shadowBlur = screenPx(10);
       ctx.beginPath();
-      ctx.arc(x, y, Math.max(screenPx(4), state.cell * 0.08), 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(255, 248, 214, ${alpha})`;
+      ctx.arc(x, y, Math.max(screenPx(6), state.cell * 0.1), 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255, 248, 204, ${coreAlpha})`;
       ctx.fill();
+      ctx.lineWidth = screenPx(1.5);
+      ctx.strokeStyle = `rgba(255, 217, 88, ${coreAlpha})`;
+      ctx.stroke();
       ctx.restore();
     });
   if (visiblePings.length) schedulePingFrame();
@@ -1006,14 +1027,127 @@ function templatePoint(template, xKey = "x", yKey = "y") {
   return cellCenter(clamp(x, 0, state.cols - 1), clamp(y, 0, state.rows - 1));
 }
 
+function angleDifference(a, b) {
+  return Math.atan2(Math.sin(a - b), Math.cos(a - b));
+}
+
+function templateGeometry(template) {
+  const sizeCells = Math.max(1, Number(template.sizeFt || 20) / 5);
+  const start = templatePoint(template);
+  const end = templatePoint(template, "endX", "endY");
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const angle = Math.atan2(dy, dx || (dy ? 0 : 1));
+  return {
+    sizeCells,
+    start,
+    end,
+    angle,
+    length: sizeCells * state.cell,
+  };
+}
+
+function templateContainsPoint(template, x, y, geometry = templateGeometry(template)) {
+  const { start, angle, length } = geometry;
+  const dx = x - start.x;
+  const dy = y - start.y;
+
+  if (template.shape === "circle") {
+    return Math.hypot(dx, dy) <= length;
+  }
+
+  if (template.shape === "square") {
+    const halfSide = length / 2;
+    return Math.abs(dx) <= halfSide && Math.abs(dy) <= halfSide;
+  }
+
+  if (template.shape === "line") {
+    const projection = dx * Math.cos(angle) + dy * Math.sin(angle);
+    const perpendicular = Math.abs(-dx * Math.sin(angle) + dy * Math.cos(angle));
+    return projection >= 0 && projection <= length && perpendicular <= state.cell / 2;
+  }
+
+  if (template.shape === "cone") {
+    const distance = Math.hypot(dx, dy);
+    if (distance <= 0.001) return true;
+    return distance <= length && Math.abs(angleDifference(Math.atan2(dy, dx), angle)) <= TEMPLATE_CONE_SPREAD;
+  }
+
+  return false;
+}
+
+function templateCellCoverage(template, cellX, cellY, geometry = templateGeometry(template)) {
+  let hits = 0;
+  const total = TEMPLATE_COVERAGE_SAMPLES * TEMPLATE_COVERAGE_SAMPLES;
+  const sampleSize = state.cell / TEMPLATE_COVERAGE_SAMPLES;
+  for (let y = 0; y < TEMPLATE_COVERAGE_SAMPLES; y += 1) {
+    for (let x = 0; x < TEMPLATE_COVERAGE_SAMPLES; x += 1) {
+      const sampleX = cellX * state.cell + (x + 0.5) * sampleSize;
+      const sampleY = cellY * state.cell + (y + 0.5) * sampleSize;
+      if (templateContainsPoint(template, sampleX, sampleY, geometry)) hits += 1;
+    }
+  }
+  return hits / total;
+}
+
+function templateCellBounds(template, geometry = templateGeometry(template)) {
+  const { start, angle, length } = geometry;
+  let minX = start.x - length;
+  let minY = start.y - length;
+  let maxX = start.x + length;
+  let maxY = start.y + length;
+
+  if (template.shape === "square") {
+    const halfSide = length / 2;
+    minX = start.x - halfSide;
+    minY = start.y - halfSide;
+    maxX = start.x + halfSide;
+    maxY = start.y + halfSide;
+  } else if (template.shape === "line") {
+    const x2 = start.x + Math.cos(angle) * length;
+    const y2 = start.y + Math.sin(angle) * length;
+    const halfWidth = state.cell / 2;
+    minX = Math.min(start.x, x2) - halfWidth;
+    minY = Math.min(start.y, y2) - halfWidth;
+    maxX = Math.max(start.x, x2) + halfWidth;
+    maxY = Math.max(start.y, y2) + halfWidth;
+  }
+
+  return {
+    minCellX: clamp(Math.floor(minX / state.cell), 0, state.cols - 1),
+    minCellY: clamp(Math.floor(minY / state.cell), 0, state.rows - 1),
+    maxCellX: clamp(Math.ceil(maxX / state.cell) - 1, 0, state.cols - 1),
+    maxCellY: clamp(Math.ceil(maxY / state.cell) - 1, 0, state.rows - 1),
+  };
+}
+
+function drawTemplateAffectedCells(template) {
+  const geometry = templateGeometry(template);
+  const bounds = templateCellBounds(template, geometry);
+
+  ctx.save();
+  ctx.fillStyle = templateColor(template, 0.45);
+  ctx.strokeStyle = templateColor(template, 3);
+  ctx.lineWidth = screenPx(2);
+  ctx.setLineDash(template.draft ? [screenPx(5), screenPx(4)] : []);
+
+  for (let y = bounds.minCellY; y <= bounds.maxCellY; y += 1) {
+    for (let x = bounds.minCellX; x <= bounds.maxCellX; x += 1) {
+      const coverage = templateCellCoverage(template, x, y, geometry);
+      if (coverage < TEMPLATE_COVERAGE_THRESHOLD) continue;
+      const px = x * state.cell;
+      const py = y * state.cell;
+      ctx.fillRect(px, py, state.cell, state.cell);
+      ctx.strokeRect(px + screenPx(1), py + screenPx(1), state.cell - screenPx(2), state.cell - screenPx(2));
+    }
+  }
+
+  ctx.restore();
+}
+
 function drawTemplates() {
   [...(state.templates || []), draftTemplate].filter(Boolean).forEach((template) => {
-    const sizeCells = Math.max(1, Number(template.sizeFt || 20) / 5);
-    const start = templatePoint(template);
-    const end = templatePoint(template, "endX", "endY");
-    const dx = end.x - start.x;
-    const dy = end.y - start.y;
-    const angle = Math.atan2(dy, dx || (dy ? 0 : 1));
+    const { sizeCells, start, angle } = templateGeometry(template);
 
     ctx.save();
     ctx.fillStyle = templateColor(template, 1);
@@ -1027,11 +1161,13 @@ function drawTemplates() {
       ctx.arc(start.x, start.y, radius, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
+      drawTemplateAffectedCells(template);
       drawTemplateLabel(`${template.sizeFt} ft`, start.x, start.y - radius - screenPx(18));
     } else if (template.shape === "square") {
       const side = sizeCells * state.cell;
       ctx.fillRect(start.x - side / 2, start.y - side / 2, side, side);
       ctx.strokeRect(start.x - side / 2, start.y - side / 2, side, side);
+      drawTemplateAffectedCells(template);
       drawTemplateLabel(`${template.sizeFt} ft`, start.x, start.y - side / 2 - screenPx(18));
     } else if (template.shape === "line") {
       const length = sizeCells * state.cell;
@@ -1051,10 +1187,11 @@ function drawTemplates() {
       ctx.moveTo(start.x, start.y);
       ctx.lineTo(x2, y2);
       ctx.stroke();
+      drawTemplateAffectedCells(template);
       drawTemplateLabel(`${template.sizeFt} ft`, (start.x + x2) / 2, (start.y + y2) / 2 - screenPx(18));
     } else if (template.shape === "cone") {
       const length = sizeCells * state.cell;
-      const spread = Math.PI / 6;
+      const spread = TEMPLATE_CONE_SPREAD;
       const left = {
         x: start.x + Math.cos(angle - spread) * length,
         y: start.y + Math.sin(angle - spread) * length,
@@ -1071,6 +1208,7 @@ function drawTemplates() {
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
+      drawTemplateAffectedCells(template);
       drawTemplateLabel(`${template.sizeFt} ft`, start.x + Math.cos(angle) * length * 0.65, start.y + Math.sin(angle) * length * 0.65);
     }
 
@@ -1598,6 +1736,12 @@ function renderInitiative() {
     const asset = state.tokenAssets.find((item) => item.id === token?.assetId);
     const isActive = activeGroup.has(entry.tokenId);
     const isFocus = entry.id === state.activeInitiativeId;
+    const sideButtons = initiativeSides
+      .map(
+        (side) =>
+          `<button class="initiative-side-button team-${side} ${entry.side === side ? "active" : ""}" type="button" data-side="${side}" aria-label="${initiativeSideLabels[side]}" title="${initiativeSideLabels[side]}"></button>`
+      )
+      .join("");
     const item = document.createElement("div");
     item.className = `initiative-item ${isActive ? "active-turn" : ""} ${isFocus ? "active-focus" : ""} side-${entry.side}`;
     item.innerHTML = `
@@ -1611,11 +1755,7 @@ function renderInitiative() {
         <button class="initiative-name" type="button">${escapeHtml(entry.name)}</button>
         <div class="initiative-controls">
           <input class="initiative-score" type="number" value="${Number(entry.value)}" aria-label="Инициатива">
-          <select class="initiative-side" aria-label="Сторона">
-            <option value="ally" ${entry.side === "ally" ? "selected" : ""}>Союзник</option>
-            <option value="enemy" ${entry.side === "enemy" ? "selected" : ""}>Враг</option>
-            <option value="neutral" ${entry.side === "neutral" ? "selected" : ""}>Нейтрал</option>
-          </select>
+          <div class="initiative-side-picker" role="group" aria-label="Команда">${sideButtons}</div>
         </div>
       </div>
       <button class="icon-action initiative-remove" type="button" aria-label="Убрать из инициативы">×</button>
@@ -1635,10 +1775,14 @@ function renderInitiative() {
       renderAll();
     });
 
-    item.querySelector(".initiative-side").addEventListener("change", (event) => {
-      captureUndo();
-      entry.side = initiativeSide(event.target.value);
-      renderAll();
+    item.querySelectorAll(".initiative-side-button").forEach((button) => {
+      button.addEventListener("click", () => {
+        const nextSide = initiativeSide(button.dataset.side);
+        if (entry.side === nextSide) return;
+        captureUndo();
+        entry.side = nextSide;
+        renderAll();
+      });
     });
 
     item.querySelector(".initiative-remove").addEventListener("click", () => {

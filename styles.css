@@ -549,6 +549,10 @@ h1 {
   font-weight: 700;
 }
 
+.paint-controls input[type="color"] {
+  min-height: 42px;
+}
+
 .brush-preview {
   height: 34px;
   border: 1px solid var(--line-strong);
@@ -835,27 +839,72 @@ audio {
 
 .initiative-controls {
   display: grid;
-  grid-template-columns: 58px minmax(0, 1fr);
+  grid-template-columns: 42px minmax(112px, 1fr);
   gap: 6px;
 }
 
-.initiative-score,
-.initiative-side {
+.initiative-score {
   min-height: 30px;
-  padding: 0 7px;
+  padding: 0 4px;
   font-size: 12px;
+  text-align: center;
 }
 
-.initiative-item.side-ally {
-  border-left: 3px solid var(--accent-2);
+.initiative-side-picker {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
 }
 
-.initiative-item.side-enemy {
-  border-left: 3px solid var(--danger);
+.initiative-side-button {
+  min-width: 0;
+  min-height: 30px;
+  padding: 0;
+  border-color: rgba(243, 234, 215, 0.22);
+  border-radius: 7px;
+  background: var(--team-color);
+  box-shadow: inset 0 -10px 18px rgba(0, 0, 0, 0.22);
 }
 
-.initiative-item.side-neutral {
-  border-left: 3px solid var(--accent-3);
+.initiative-side-button.active {
+  border-color: rgba(255, 246, 196, 0.92);
+  box-shadow:
+    0 0 0 1px rgba(255, 246, 196, 0.35),
+    0 0 14px color-mix(in srgb, var(--team-color) 65%, transparent),
+    inset 0 -10px 18px rgba(0, 0, 0, 0.12);
+  transform: translateY(-1px);
+}
+
+.team-red {
+  --team-color: #c94d3d;
+}
+
+.team-blue {
+  --team-color: #3b82c4;
+}
+
+.team-gray {
+  --team-color: #373737;
+}
+
+.team-green {
+  --team-color: #5f9f59;
+}
+
+.initiative-item.side-red {
+  border-left: 3px solid #c94d3d;
+}
+
+.initiative-item.side-blue {
+  border-left: 3px solid #3b82c4;
+}
+
+.initiative-item.side-gray {
+  border-left: 3px solid #373737;
+}
+
+.initiative-item.side-green {
+  border-left: 3px solid #5f9f59;
 }
 
 .initiative-remove {
