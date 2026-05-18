@@ -130,7 +130,7 @@
               </label>
               <label>
                 <span>Размер</span>
-                <input id="tokenSizeInput" type="number" min="1" max="6" value="1" />
+                <input id="tokenSizeInput" type="number" min="0.5" max="6" step="0.5" value="1" />
               </label>
             </div>
             <div class="asset-list" id="tokenAssets"></div>
@@ -266,6 +266,13 @@
               <label>
                 <span>Футы</span>
                 <input id="templateSizeInput" type="number" min="5" max="150" step="5" value="20" />
+              </label>
+              <label>
+                <span>Центр</span>
+                <select id="templateCenterInput">
+                  <option value="cell">Клетка</option>
+                  <option value="corner">Между клеток</option>
+                </select>
               </label>
               <label>
                 <span>Цвет</span>

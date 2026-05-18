@@ -56,6 +56,7 @@ const els = {
   handoutAssets: document.querySelector("#handoutAssets"),
   templateShapeInput: document.querySelector("#templateShapeInput"),
   templateSizeInput: document.querySelector("#templateSizeInput"),
+  templateCenterInput: document.querySelector("#templateCenterInput"),
   templateColorInput: document.querySelector("#templateColorInput"),
   templateOpacityInput: document.querySelector("#templateOpacityInput"),
   clearMeasureBtn: document.querySelector("#clearMeasureBtn"),
@@ -102,6 +103,7 @@ const defaultState = {
   measurement: null,
   selectedTemplateShape: "circle",
   selectedTemplateSize: 20,
+  selectedTemplateCenter: "cell",
   selectedTemplateColor: "#d1a850",
   selectedTemplateOpacity: 35,
   selectedTokenAssetId: null,
@@ -124,6 +126,8 @@ let toastTimer = null;
 let transientUrls = new Set();
 let syncTimer = null;
 let heartbeatTimer = null;
+const undoStack = [];
+const UNDO_LIMIT = 20;
 
 const sync = {
   online: location.protocol === "http:" || location.protocol === "https:",
@@ -298,6 +302,15 @@ function applySceneToState(target, scene) {
   target.selectedObject = null;
 }
 
+function tokenFootprint(token) {
+  return clamp(Math.ceil(Number(token.size) || 1), 1, 6);
+}
+
+function tokenVisualSize(token) {
+  const footprint = tokenFootprint(token);
+  return clamp(Number(token.visualSize ?? token.size) || footprint, 0.5, footprint);
+}
+
 function backgroundSize() {
   const width = Number(state.background?.width || state.background?.naturalWidth || 0);
   const height = Number(state.background?.height || state.background?.naturalHeight || 0);
@@ -315,8 +328,11 @@ function fitGridToBackground() {
 
 function clampObjectsToMap() {
   state.tokens.forEach((token) => {
-    token.x = clamp(token.x, 0, Math.max(0, state.cols - token.size));
-    token.y = clamp(token.y, 0, Math.max(0, state.rows - token.size));
+    const size = tokenFootprint(token);
+    token.size = size;
+    token.visualSize = tokenVisualSize(token);
+    token.x = clamp(token.x, 0, Math.max(0, state.cols - size));
+    token.y = clamp(token.y, 0, Math.max(0, state.rows - size));
   });
   state.handouts.forEach((handout) => {
     handout.x = clamp(handout.x, 0, Math.max(0, state.cols - handout.w));
@@ -331,12 +347,14 @@ function clampObjectsToMap() {
     const y = Number.isFinite(Number(template.y)) ? Number(template.y) : 0;
     const endX = Number.isFinite(Number(template.endX)) ? Number(template.endX) : x;
     const endY = Number.isFinite(Number(template.endY)) ? Number(template.endY) : y;
+    const maxX = template.center === "corner" ? state.cols : state.cols - 1;
+    const maxY = template.center === "corner" ? state.rows : state.rows - 1;
     return {
       ...template,
-      x: clamp(x, 0, state.cols - 1),
-      y: clamp(y, 0, state.rows - 1),
-      endX: clamp(endX, 0, state.cols - 1),
-      endY: clamp(endY, 0, state.rows - 1),
+      x: clamp(x, 0, maxX),
+      y: clamp(y, 0, maxY),
+      endX: clamp(endX, 0, maxX),
+      endY: clamp(endY, 0, maxY),
     };
   });
   if (state.measurement) {
@@ -376,6 +394,36 @@ function serializeState(source) {
     scenes: structuredClone(source.scenes || []),
     musicTracks: (source.musicTracks || []).filter((track) => !track.transient),
   };
+}
+
+function captureUndo() {
+  saveActiveScene();
+  const snapshot = JSON.stringify(serializeState(state));
+  if (undoStack[undoStack.length - 1] === snapshot) return;
+  undoStack.push(snapshot);
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+}
+
+function undoLastAction() {
+  const snapshot = undoStack.pop();
+  if (!snapshot) {
+    showToast("Отменять пока нечего.");
+    return;
+  }
+
+  const currentTool = state.activeTool;
+  const previous = JSON.parse(snapshot);
+  state = {
+    ...structuredClone(defaultState),
+    ...previous,
+    activeTool: currentTool,
+    selectedObject: null,
+    musicTracks: (previous.musicTracks || []).filter((track) => !track.transient),
+  };
+  normalizeScenes(state);
+  imageCache = new Map();
+  renderAll();
+  showToast("Отменено.");
 }
 
 function applyRemoteState(nextState, revision = sync.revision) {
@@ -597,6 +645,7 @@ function syncInputs() {
   els.brushPreview.style.setProperty("--brush-preview", brushColorString());
   els.templateShapeInput.value = state.selectedTemplateShape;
   els.templateSizeInput.value = state.selectedTemplateSize;
+  els.templateCenterInput.value = state.selectedTemplateCenter;
   els.templateColorInput.value = state.selectedTemplateColor;
   els.templateOpacityInput.value = state.selectedTemplateOpacity;
   els.sceneNameInput.value = state.sceneName;
@@ -703,21 +752,25 @@ function drawTokens() {
     const asset = state.tokenAssets.find((item) => item.id === token.assetId);
     const px = token.x * state.cell;
     const py = token.y * state.cell;
-    const size = token.size * state.cell;
-    const centerX = px + size / 2;
-    const centerY = py + size / 2;
-    const radius = size / 2 - 4;
+    const footprint = tokenFootprint(token) * state.cell;
+    const visualSize = tokenVisualSize(token) * state.cell;
+    const centerX = px + footprint / 2;
+    const centerY = py + footprint / 2;
+    const visualX = centerX - visualSize / 2;
+    const visualY = centerY - visualSize / 2;
+    const padding = clamp(visualSize * 0.12, 2, 5);
+    const radius = Math.max(5, visualSize / 2 - padding);
 
     ctx.save();
     ctx.beginPath();
-    ctx.arc(centerX, centerY, Math.max(8, radius), 0, Math.PI * 2);
+    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
     ctx.clip();
     const img = getImage(asset?.src);
     if (img?.complete && img.naturalWidth) {
-      drawCoverImage(img, px + 4, py + 4, size - 8, size - 8);
+      drawCoverImage(img, visualX + padding, visualY + padding, visualSize - padding * 2, visualSize - padding * 2);
     } else {
       ctx.fillStyle = "#6f8f53";
-      ctx.fillRect(px + 4, py + 4, size - 8, size - 8);
+      ctx.fillRect(visualX + padding, visualY + padding, visualSize - padding * 2, visualSize - padding * 2);
     }
     ctx.restore();
 
@@ -725,7 +778,7 @@ function drawTokens() {
     ctx.lineWidth = 3;
     ctx.strokeStyle = state.selectedObject?.id === token.id ? "#d1a850" : "#11100f";
     ctx.beginPath();
-    ctx.arc(centerX, centerY, Math.max(8, radius), 0, Math.PI * 2);
+    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
     ctx.stroke();
     ctx.lineWidth = 1;
     ctx.strokeStyle = "rgba(243, 234, 215, 0.85)";
@@ -737,16 +790,16 @@ function drawTokens() {
       ctx.font = "12px Inter, system-ui, sans-serif";
       const label = token.name.slice(0, 20);
       const metrics = ctx.measureText(label);
-      const labelWidth = Math.min(size + 36, metrics.width + 14);
-      const labelX = px + size / 2 - labelWidth / 2;
-      const labelY = py + size + 4;
+      const labelWidth = Math.min(footprint + 36, metrics.width + 14);
+      const labelX = px + footprint / 2 - labelWidth / 2;
+      const labelY = py + footprint + 4;
       ctx.fillStyle = "rgba(17, 16, 15, 0.82)";
       roundRect(labelX, labelY, labelWidth, 20, 5);
       ctx.fill();
       ctx.fillStyle = "#f3ead7";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(label, px + size / 2, labelY + 10, labelWidth - 8);
+      ctx.fillText(label, px + footprint / 2, labelY + 10, labelWidth - 8);
       ctx.restore();
     }
   });
@@ -794,12 +847,33 @@ function cellCenter(cellX, cellY) {
   };
 }
 
+function gridIntersection(point) {
+  return {
+    x: clamp(Math.round(point.x / state.cell), 0, state.cols),
+    y: clamp(Math.round(point.y / state.cell), 0, state.rows),
+  };
+}
+
+function templatePoint(template, xKey = "x", yKey = "y") {
+  const x = Number(template[xKey] ?? template.x ?? 0);
+  const y = Number(template[yKey] ?? template.y ?? 0);
+  if (template.center === "corner") {
+    return {
+      x: clamp(x, 0, state.cols) * state.cell,
+      y: clamp(y, 0, state.rows) * state.cell,
+    };
+  }
+  return cellCenter(clamp(x, 0, state.cols - 1), clamp(y, 0, state.rows - 1));
+}
+
 function drawTemplates() {
   [...(state.templates || []), draftTemplate].filter(Boolean).forEach((template) => {
     const sizeCells = Math.max(1, Number(template.sizeFt || 20) / 5);
-    const start = cellCenter(template.x, template.y);
-    const end = cellCenter(template.endX ?? template.x + sizeCells, template.endY ?? template.y);
-    const angle = Math.atan2(end.y - start.y, end.x - start.x || 1);
+    const start = templatePoint(template);
+    const end = templatePoint(template, "endX", "endY");
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const angle = Math.atan2(dy, dx || (dy ? 0 : 1));
 
     ctx.save();
     ctx.fillStyle = templateColor(template, 1);
@@ -913,8 +987,8 @@ function drawSelection() {
   if (!object) return;
   const px = object.x * state.cell;
   const py = object.y * state.cell;
-  const w = (object.size || object.w) * state.cell;
-  const h = (object.size || object.h) * state.cell;
+  const w = (state.selectedObject.type === "token" ? tokenFootprint(object) : object.w) * state.cell;
+  const h = (state.selectedObject.type === "token" ? tokenFootprint(object) : object.h) * state.cell;
   ctx.save();
   ctx.strokeStyle = "rgba(209, 168, 80, 0.55)";
   ctx.setLineDash([8, 6]);
@@ -985,11 +1059,12 @@ function setTerrainAt(point) {
 function objectAt(point) {
   for (let i = state.tokens.length - 1; i >= 0; i -= 1) {
     const token = state.tokens[i];
+    const size = tokenFootprint(token);
     if (
       point.cellX >= token.x &&
-      point.cellX < token.x + token.size &&
+      point.cellX < token.x + size &&
       point.cellY >= token.y &&
-      point.cellY < token.y + token.size
+      point.cellY < token.y + size
     ) {
       return { type: "token", object: token };
     }
@@ -1014,18 +1089,26 @@ function selectObject(type, object) {
   saveState();
 }
 
+function tokenSizeInputValue() {
+  const raw = Number(String(els.tokenSizeInput.value).replace(",", "."));
+  return clamp(raw || 1, 0.5, 6);
+}
+
 function placeToken(point) {
   const asset = state.tokenAssets.find((item) => item.id === state.selectedTokenAssetId);
   if (!asset) {
     showToast("Сначала добавь и выбери изображение фигурки.");
     return;
   }
-  const size = clamp(Number(els.tokenSizeInput.value) || 1, 1, 6);
+  captureUndo();
+  const visualSize = tokenSizeInputValue();
+  const size = Math.max(1, Math.ceil(visualSize));
   const token = {
     id: uid("token"),
     assetId: asset.id,
     name: els.tokenNameInput.value.trim() || asset.name.replace(/\.[^.]+$/, ""),
     size,
+    visualSize,
     x: clamp(point.cellX, 0, Math.max(0, state.cols - size)),
     y: clamp(point.cellY, 0, Math.max(0, state.rows - size)),
   };
@@ -1040,6 +1123,7 @@ function placeHandout(point) {
     showToast("Сначала добавь и выбери картинку.");
     return;
   }
+  captureUndo();
   const w = clamp(Number(els.handoutWidthInput.value) || 5, 2, 16);
   const h = clamp(Number(els.handoutHeightInput.value) || 4, 2, 16);
   const handout = {
@@ -1080,8 +1164,8 @@ function moveDrag(point) {
     object.w = clamp(point.cellX - object.x + 1, 2, state.cols - object.x);
     object.h = clamp(point.cellY - object.y + 1, 2, state.rows - object.y);
   } else {
-    const w = object.size || object.w;
-    const h = object.size || object.h;
+    const w = drag.type === "token" ? tokenFootprint(object) : object.w;
+    const h = drag.type === "token" ? tokenFootprint(object) : object.h;
     object.x = clamp(point.cellX - drag.offsetX, 0, Math.max(0, state.cols - w));
     object.y = clamp(point.cellY - drag.offsetY, 0, Math.max(0, state.rows - h));
   }
@@ -1114,13 +1198,18 @@ function updateMeasurement(point) {
 function startTemplate(point) {
   const sizeFt = templateSizeFt();
   const sizeCells = Math.max(1, Math.round(sizeFt / 5));
+  const center = state.selectedTemplateCenter === "corner" ? "corner" : "cell";
+  const start = center === "corner" ? gridIntersection(point) : { x: point.cellX, y: point.cellY };
+  const maxX = center === "corner" ? state.cols : state.cols - 1;
+  const maxY = center === "corner" ? state.rows : state.rows - 1;
   draftTemplate = {
     id: uid("template"),
     shape: state.selectedTemplateShape,
-    x: point.cellX,
-    y: point.cellY,
-    endX: clamp(point.cellX + sizeCells, 0, state.cols - 1),
-    endY: point.cellY,
+    center,
+    x: start.x,
+    y: start.y,
+    endX: clamp(start.x + sizeCells, 0, maxX),
+    endY: clamp(start.y, 0, maxY),
     sizeFt,
     color: state.selectedTemplateColor,
     opacity: state.selectedTemplateOpacity,
@@ -1132,8 +1221,9 @@ function startTemplate(point) {
 
 function updateDraftTemplate(point) {
   if (!draftTemplate) return;
-  draftTemplate.endX = point.cellX;
-  draftTemplate.endY = point.cellY;
+  const end = draftTemplate.center === "corner" ? gridIntersection(point) : { x: point.cellX, y: point.cellY };
+  draftTemplate.endX = end.x;
+  draftTemplate.endY = end.y;
   renderCanvas();
 }
 
@@ -1152,22 +1242,26 @@ canvas.addEventListener("pointerdown", (event) => {
   const hit = objectAt(point);
 
   if (hit && ["select", "token", "image"].includes(state.activeTool)) {
+    captureUndo();
     beginDrag(hit.type, hit.object, point);
     return;
   }
 
   if (state.activeTool === "paint" || state.activeTool === "erase") {
+    captureUndo();
     drag = { type: "paint" };
     setTerrainAt(point);
     return;
   }
 
   if (state.activeTool === "measure") {
+    captureUndo();
     startMeasurement(point);
     return;
   }
 
   if (state.activeTool === "template") {
+    captureUndo();
     startTemplate(point);
     return;
   }
@@ -1314,6 +1408,7 @@ function addImageFiles(files, type) {
     if (!file.type.startsWith("image/")) return;
     const reader = new FileReader();
     reader.onload = () => {
+      captureUndo();
       const asset = {
         id: uid(type),
         name: file.name,
@@ -1355,6 +1450,7 @@ els.mapBackgroundInput.addEventListener("change", (event) => {
     const src = reader.result;
     const img = new Image();
     img.onload = () => {
+      captureUndo();
       state.background = {
         id: uid("background"),
         name: file.name,
@@ -1369,6 +1465,7 @@ els.mapBackgroundInput.addEventListener("change", (event) => {
       showToast("Фон карты добавлен, сетка подстроена под картинку.");
     };
     img.onerror = () => {
+      captureUndo();
       state.background = {
         id: uid("background"),
         name: file.name,
@@ -1390,6 +1487,7 @@ els.clearBackgroundBtn.addEventListener("click", () => {
     showToast("Фон ещё не загружен.");
     return;
   }
+  captureUndo();
   state.backgroundHidden = !state.backgroundHidden;
   renderAll();
 });
@@ -1630,6 +1728,12 @@ els.templateSizeInput.addEventListener("input", (event) => {
   saveState();
 });
 
+els.templateCenterInput.addEventListener("change", (event) => {
+  state.selectedTemplateCenter = event.target.value === "corner" ? "corner" : "cell";
+  syncInputs();
+  saveState();
+});
+
 els.templateColorInput.addEventListener("input", (event) => {
   state.selectedTemplateColor = event.target.value;
   syncInputs();
@@ -1643,11 +1747,13 @@ els.templateOpacityInput.addEventListener("input", (event) => {
 });
 
 els.clearMeasureBtn.addEventListener("click", () => {
+  captureUndo();
   state.measurement = null;
   renderAll();
 });
 
 els.clearTemplatesBtn.addEventListener("click", () => {
+  captureUndo();
   state.templates = [];
   draftTemplate = null;
   renderAll();
@@ -1673,11 +1779,13 @@ els.sceneNameInput.addEventListener("input", (event) => {
 });
 
 els.newSceneBtn.addEventListener("click", () => {
+  captureUndo();
   createSceneFromCurrent(false);
   showToast("Создана новая пустая сцена.");
 });
 
 els.duplicateSceneBtn.addEventListener("click", () => {
+  captureUndo();
   createSceneFromCurrent(true);
   showToast("Сцена продублирована.");
 });
@@ -1687,6 +1795,7 @@ els.deleteSceneBtn.addEventListener("click", () => {
     showToast("Нужна хотя бы одна сцена.");
     return;
   }
+  captureUndo();
   const currentId = state.activeSceneId;
   const currentIndex = state.scenes.findIndex((scene) => scene.id === currentId);
   state.scenes = state.scenes.filter((scene) => scene.id !== currentId);
@@ -1699,6 +1808,7 @@ els.deleteSceneBtn.addEventListener("click", () => {
 });
 
 els.gridToggle.addEventListener("change", (event) => {
+  captureUndo();
   state.showGrid = event.target.checked;
   renderAll();
 });
@@ -1708,7 +1818,8 @@ els.zoomInput.addEventListener("input", (event) => {
   renderAll();
 });
 
-function applyMapInputs() {
+function applyMapInputs(shouldCapture = true) {
+  if (shouldCapture) captureUndo();
   state.cols = clamp(Number(els.colsInput.value) || state.cols, MAP_LIMITS.minCols, MAP_LIMITS.maxCols);
   state.rows = clamp(Number(els.rowsInput.value) || state.rows, MAP_LIMITS.minRows, MAP_LIMITS.maxRows);
   state.cell = clamp(Number(els.cellInput.value) || state.cell, MAP_LIMITS.minCell, MAP_LIMITS.maxCell);
@@ -1721,17 +1832,22 @@ function applyMapInputs() {
 });
 
 els.cellInput.addEventListener("change", () => {
+  captureUndo();
   state.cell = clamp(Number(els.cellInput.value) || state.cell, MAP_LIMITS.minCell, MAP_LIMITS.maxCell);
   if (fitGridToBackground()) {
     renderAll();
     showToast("Размер клетки изменён, ряды и колонки пересчитаны по фону.");
   } else {
-    applyMapInputs();
+    applyMapInputs(false);
   }
 });
 
 document.querySelector("#newMapBtn").addEventListener("click", () => {
-  applyMapInputs();
+  captureUndo();
+  state.cols = clamp(Number(els.colsInput.value) || state.cols, MAP_LIMITS.minCols, MAP_LIMITS.maxCols);
+  state.rows = clamp(Number(els.rowsInput.value) || state.rows, MAP_LIMITS.minRows, MAP_LIMITS.maxRows);
+  state.cell = clamp(Number(els.cellInput.value) || state.cell, MAP_LIMITS.minCell, MAP_LIMITS.maxCell);
+  clampObjectsToMap();
   state.terrain = {};
   state.tokens = [];
   state.handouts = [];
@@ -1743,11 +1859,13 @@ document.querySelector("#newMapBtn").addEventListener("click", () => {
 });
 
 document.querySelector("#clearPaintBtn").addEventListener("click", () => {
+  captureUndo();
   state.terrain = {};
   renderAll();
 });
 
 document.querySelector("#clearTokensBtn").addEventListener("click", () => {
+  captureUndo();
   state.tokens = [];
   state.handouts = [];
   state.selectedObject = null;
@@ -1756,6 +1874,7 @@ document.querySelector("#clearTokensBtn").addEventListener("click", () => {
 
 document.querySelector("#resetSceneBtn").addEventListener("click", () => {
   if (!confirm("Сбросить карту, изображения, музыку и историю бросков?")) return;
+  captureUndo();
   transientUrls.forEach((src) => URL.revokeObjectURL(src));
   transientUrls.clear();
   localStorage.removeItem(STORAGE_KEY);
@@ -1794,6 +1913,7 @@ document.querySelector("#importSceneInput").addEventListener("change", (event) =
   reader.onload = () => {
     try {
       const imported = JSON.parse(reader.result);
+      captureUndo();
       state = {
         ...structuredClone(defaultState),
         ...imported,
@@ -1820,7 +1940,12 @@ function escapeHtml(value) {
 }
 
 window.addEventListener("keydown", (event) => {
-  if (event.target.matches("input, textarea")) return;
+  if (event.target?.matches?.("input, textarea, select")) return;
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z" && !event.shiftKey) {
+    event.preventDefault();
+    undoLastAction();
+    return;
+  }
   const keyMap = {
     b: "paint",
     e: "erase",
@@ -1833,6 +1958,7 @@ window.addEventListener("keydown", (event) => {
     renderAll();
   }
   if (event.key === "Delete" && state.selectedObject) {
+    captureUndo();
     if (state.selectedObject.type === "token") {
       state.tokens = state.tokens.filter((item) => item.id !== state.selectedObject.id);
     } else {
