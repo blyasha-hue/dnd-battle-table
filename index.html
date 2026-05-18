@@ -18,7 +18,6 @@
         </div>
 
         <div class="top-actions" aria-label="Действия сцены">
-          <button class="collapse-button" id="topDrawerToggle" type="button" title="Свернуть верх" aria-label="Свернуть верх">⌃</button>
           <button class="ghost-button" id="exportSceneBtn" type="button">Экспорт</button>
           <label class="ghost-button file-button">
             Импорт
@@ -88,7 +87,7 @@
                 Фон карты
                 <input id="mapBackgroundInput" type="file" accept="image/*" />
               </label>
-              <button id="clearBackgroundBtn" type="button">Убрать фон</button>
+              <button id="clearBackgroundBtn" type="button">Скрыть фон</button>
             </div>
           </section>
 
@@ -217,6 +216,14 @@
                 <span class="tool-icon select-icon"></span>
                 <span>Выбор</span>
               </button>
+              <button class="tool-button" data-tool="measure" type="button" title="Линейка">
+                <span class="tool-icon measure-icon"></span>
+                <span>Линейка</span>
+              </button>
+              <button class="tool-button" data-tool="template" type="button" title="Шаблоны">
+                <span class="tool-icon template-icon"></span>
+                <span>Шаблон</span>
+              </button>
             </div>
 
             <div class="paint-controls">
@@ -241,6 +248,37 @@
                 <button class="swatch" style="--swatch: #c6a64d" data-color="#c6a64d" type="button" title="Свет"></button>
               </div>
               <div class="brush-preview" id="brushPreview"></div>
+            </div>
+          </section>
+
+          <section class="panel measure-panel">
+            <h2>Линейка и шаблоны</h2>
+            <div class="field-grid two">
+              <label>
+                <span>Форма</span>
+                <select id="templateShapeInput">
+                  <option value="circle">Круг</option>
+                  <option value="square">Квадрат</option>
+                  <option value="cone">Конус</option>
+                  <option value="line">Линия</option>
+                </select>
+              </label>
+              <label>
+                <span>Футы</span>
+                <input id="templateSizeInput" type="number" min="5" max="150" step="5" value="20" />
+              </label>
+              <label>
+                <span>Цвет</span>
+                <input id="templateColorInput" type="color" value="#d1a850" />
+              </label>
+              <label>
+                <span>Прозрачность</span>
+                <input id="templateOpacityInput" type="range" min="15" max="80" value="35" />
+              </label>
+            </div>
+            <div class="button-row">
+              <button id="clearMeasureBtn" type="button">Стереть линейку</button>
+              <button id="clearTemplatesBtn" type="button">Стереть шаблоны</button>
             </div>
           </section>
 
@@ -273,7 +311,10 @@
               <h2 id="sceneTitle">Засада у старой дороги</h2>
               <p id="sceneMeta">24 x 16 клеток</p>
             </div>
-            <div class="mode-chip" id="modeChip">Кисть</div>
+            <div class="battle-actions">
+              <div class="mode-chip" id="modeChip">Кисть</div>
+              <button class="collapse-button" id="topDrawerToggle" type="button" title="Свернуть верх" aria-label="Свернуть верх">⌃</button>
+            </div>
           </div>
           <div class="canvas-shell" id="canvasShell">
             <canvas id="battleCanvas" aria-label="Карта боя"></canvas>

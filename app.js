@@ -54,6 +54,12 @@ const els = {
   handoutHeightInput: document.querySelector("#handoutHeightInput"),
   tokenAssets: document.querySelector("#tokenAssets"),
   handoutAssets: document.querySelector("#handoutAssets"),
+  templateShapeInput: document.querySelector("#templateShapeInput"),
+  templateSizeInput: document.querySelector("#templateSizeInput"),
+  templateColorInput: document.querySelector("#templateColorInput"),
+  templateOpacityInput: document.querySelector("#templateOpacityInput"),
+  clearMeasureBtn: document.querySelector("#clearMeasureBtn"),
+  clearTemplatesBtn: document.querySelector("#clearTemplatesBtn"),
   musicUrlInput: document.querySelector("#musicUrlInput"),
   musicNameInput: document.querySelector("#musicNameInput"),
   musicFileInput: document.querySelector("#musicFileInput"),
@@ -69,6 +75,8 @@ const toolNames = {
   token: "Фигурки",
   image: "Картинки",
   select: "Выбор",
+  measure: "Линейка",
+  template: "Шаблон",
 };
 
 const defaultState = {
@@ -79,6 +87,7 @@ const defaultState = {
   zoom: 100,
   showGrid: true,
   background: null,
+  backgroundHidden: false,
   activeTool: "paint",
   brushColor: "#6f8f53",
   brushLight: 100,
@@ -89,6 +98,12 @@ const defaultState = {
   handoutAssets: [],
   tokens: [],
   handouts: [],
+  templates: [],
+  measurement: null,
+  selectedTemplateShape: "circle",
+  selectedTemplateSize: 20,
+  selectedTemplateColor: "#d1a850",
+  selectedTemplateOpacity: 35,
   selectedTokenAssetId: null,
   selectedHandoutAssetId: null,
   selectedObject: null,
@@ -102,6 +117,7 @@ const defaultState = {
 let state = loadState();
 normalizeScenes(state);
 let drag = null;
+let draftTemplate = null;
 let imageCache = new Map();
 let saveTimer = null;
 let toastTimer = null;
@@ -202,9 +218,12 @@ function sceneFromState(source, overrides = {}) {
     cell: Number(source.cell) || 42,
     showGrid: source.showGrid !== false,
     background: source.background || null,
+    backgroundHidden: source.backgroundHidden === true,
     terrain: structuredClone(source.terrain || {}),
     tokens: structuredClone(source.tokens || []),
     handouts: structuredClone(source.handouts || []),
+    templates: structuredClone(source.templates || []),
+    measurement: source.measurement ? structuredClone(source.measurement) : null,
   };
 }
 
@@ -217,9 +236,12 @@ function blankScene(name = "Новая сцена") {
     cell: 42,
     showGrid: true,
     background: null,
+    backgroundHidden: false,
     terrain: {},
     tokens: [],
     handouts: [],
+    templates: [],
+    measurement: null,
   };
 }
 
@@ -236,7 +258,10 @@ function normalizeScenes(target) {
     terrain: scene.terrain || {},
     tokens: scene.tokens || [],
     handouts: scene.handouts || [],
+    templates: scene.templates || [],
+    measurement: scene.measurement || null,
     background: scene.background || null,
+    backgroundHidden: scene.backgroundHidden === true,
   }));
 
   if (!target.scenes.some((scene) => scene.id === target.activeSceneId)) {
@@ -264,9 +289,12 @@ function applySceneToState(target, scene) {
   target.cell = scene.cell;
   target.showGrid = scene.showGrid !== false;
   target.background = scene.background || null;
+  target.backgroundHidden = scene.backgroundHidden === true;
   target.terrain = structuredClone(scene.terrain || {});
   target.tokens = structuredClone(scene.tokens || []);
   target.handouts = structuredClone(scene.handouts || []);
+  target.templates = structuredClone(scene.templates || []);
+  target.measurement = scene.measurement ? structuredClone(scene.measurement) : null;
   target.selectedObject = null;
 }
 
@@ -298,6 +326,31 @@ function clampObjectsToMap() {
     const [x, y] = key.split(",").map(Number);
     if (x >= state.cols || y >= state.rows) delete state.terrain[key];
   });
+  state.templates = (state.templates || []).map((template) => {
+    const x = Number.isFinite(Number(template.x)) ? Number(template.x) : 0;
+    const y = Number.isFinite(Number(template.y)) ? Number(template.y) : 0;
+    const endX = Number.isFinite(Number(template.endX)) ? Number(template.endX) : x;
+    const endY = Number.isFinite(Number(template.endY)) ? Number(template.endY) : y;
+    return {
+      ...template,
+      x: clamp(x, 0, state.cols - 1),
+      y: clamp(y, 0, state.rows - 1),
+      endX: clamp(endX, 0, state.cols - 1),
+      endY: clamp(endY, 0, state.rows - 1),
+    };
+  });
+  if (state.measurement) {
+    const startX = Number.isFinite(Number(state.measurement.startX)) ? Number(state.measurement.startX) : 0;
+    const startY = Number.isFinite(Number(state.measurement.startY)) ? Number(state.measurement.startY) : 0;
+    const endX = Number.isFinite(Number(state.measurement.endX)) ? Number(state.measurement.endX) : startX;
+    const endY = Number.isFinite(Number(state.measurement.endY)) ? Number(state.measurement.endY) : startY;
+    state.measurement = {
+      startX: clamp(startX, 0, state.cols - 1),
+      startY: clamp(startY, 0, state.rows - 1),
+      endX: clamp(endX, 0, state.cols - 1),
+      endY: clamp(endY, 0, state.rows - 1),
+    };
+  }
 }
 
 function loadState() {
@@ -526,19 +579,26 @@ function resizeCanvas() {
 
 function syncInputs() {
   els.sceneTitle.textContent = state.sceneName;
-  els.sceneMeta.textContent = `${state.cols} x ${state.rows} клеток${state.background ? " · фон карты" : ""}`;
+  const backgroundMeta = state.background ? (state.backgroundHidden ? " · фон скрыт" : " · фон карты") : "";
+  els.sceneMeta.textContent = `${state.cols} x ${state.rows} клеток${backgroundMeta}`;
   els.modeChip.textContent = toolNames[state.activeTool];
   els.colsInput.value = state.cols;
   els.rowsInput.value = state.rows;
   els.cellInput.value = state.cell;
   els.zoomInput.value = state.zoom;
   els.gridToggle.checked = state.showGrid;
+  els.clearBackgroundBtn.textContent = state.backgroundHidden ? "Показать фон" : "Скрыть фон";
+  els.clearBackgroundBtn.disabled = !state.background;
   els.brushColorInput.value = state.brushColor;
   els.brushOpacityInput.value = state.brushOpacity;
   els.brushOpacityValue.textContent = `${state.brushOpacity}%`;
   els.brushSizeInput.value = state.brushSize;
   els.brushSizeValue.textContent = state.brushSize;
   els.brushPreview.style.setProperty("--brush-preview", brushColorString());
+  els.templateShapeInput.value = state.selectedTemplateShape;
+  els.templateSizeInput.value = state.selectedTemplateSize;
+  els.templateColorInput.value = state.selectedTemplateColor;
+  els.templateOpacityInput.value = state.selectedTemplateOpacity;
   els.sceneNameInput.value = state.sceneName;
 
   document.querySelectorAll(".tool-button").forEach((button) => {
@@ -587,7 +647,9 @@ function renderCanvas() {
   drawTerrain();
   drawHandouts();
   drawGrid(width, height);
+  drawTemplates();
   drawTokens();
+  drawMeasurement();
   drawSelection();
 }
 
@@ -595,7 +657,7 @@ function drawBase(width, height) {
   ctx.fillStyle = "#272216";
   ctx.fillRect(0, 0, width, height);
 
-  const background = state.background?.src ? getImage(state.background.src) : null;
+  const background = state.background?.src && !state.backgroundHidden ? getImage(state.background.src) : null;
   if (background?.complete && background.naturalWidth) {
     ctx.drawImage(background, 0, 0, width, height);
     ctx.fillStyle = "rgba(0, 0, 0, 0.12)";
@@ -717,6 +779,129 @@ function drawHandouts() {
     }
     ctx.restore();
   });
+}
+
+function templateColor(template, alphaMultiplier = 1) {
+  const rgb = hexToRgb(template.color || state.selectedTemplateColor);
+  const alpha = clamp(Number(template.opacity ?? state.selectedTemplateOpacity) || 35, 5, 100) / 100;
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${clamp(alpha * alphaMultiplier, 0, 1)})`;
+}
+
+function cellCenter(cellX, cellY) {
+  return {
+    x: cellX * state.cell + state.cell / 2,
+    y: cellY * state.cell + state.cell / 2,
+  };
+}
+
+function drawTemplates() {
+  [...(state.templates || []), draftTemplate].filter(Boolean).forEach((template) => {
+    const sizeCells = Math.max(1, Number(template.sizeFt || 20) / 5);
+    const start = cellCenter(template.x, template.y);
+    const end = cellCenter(template.endX ?? template.x + sizeCells, template.endY ?? template.y);
+    const angle = Math.atan2(end.y - start.y, end.x - start.x || 1);
+
+    ctx.save();
+    ctx.fillStyle = templateColor(template, 1);
+    ctx.strokeStyle = templateColor(template, 2.2);
+    ctx.lineWidth = 2;
+    ctx.setLineDash(template.draft ? [8, 6] : []);
+
+    if (template.shape === "circle") {
+      const radius = sizeCells * state.cell;
+      ctx.beginPath();
+      ctx.arc(start.x, start.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      drawTemplateLabel(`${template.sizeFt} ft`, start.x, start.y - radius - 8);
+    } else if (template.shape === "square") {
+      const side = sizeCells * state.cell;
+      ctx.fillRect(start.x - side / 2, start.y - side / 2, side, side);
+      ctx.strokeRect(start.x - side / 2, start.y - side / 2, side, side);
+      drawTemplateLabel(`${template.sizeFt} ft`, start.x, start.y - side / 2 - 8);
+    } else if (template.shape === "line") {
+      const length = sizeCells * state.cell;
+      const width = state.cell;
+      const x2 = start.x + Math.cos(angle) * length;
+      const y2 = start.y + Math.sin(angle) * length;
+      ctx.lineCap = "round";
+      ctx.lineWidth = width;
+      ctx.strokeStyle = templateColor(template, 1);
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = templateColor(template, 2.4);
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      drawTemplateLabel(`${template.sizeFt} ft`, (start.x + x2) / 2, (start.y + y2) / 2 - 12);
+    } else if (template.shape === "cone") {
+      const length = sizeCells * state.cell;
+      const spread = Math.PI / 6;
+      const left = {
+        x: start.x + Math.cos(angle - spread) * length,
+        y: start.y + Math.sin(angle - spread) * length,
+      };
+      const right = {
+        x: start.x + Math.cos(angle + spread) * length,
+        y: start.y + Math.sin(angle + spread) * length,
+      };
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(left.x, left.y);
+      ctx.arc(start.x, start.y, length, angle - spread, angle + spread);
+      ctx.lineTo(start.x, start.y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      drawTemplateLabel(`${template.sizeFt} ft`, start.x + Math.cos(angle) * length * 0.65, start.y + Math.sin(angle) * length * 0.65);
+    }
+
+    ctx.restore();
+  });
+}
+
+function drawTemplateLabel(label, x, y) {
+  ctx.save();
+  ctx.font = "12px Inter, system-ui, sans-serif";
+  const width = ctx.measureText(label).width + 14;
+  ctx.fillStyle = "rgba(17, 16, 15, 0.82)";
+  roundRect(x - width / 2, y - 10, width, 20, 5);
+  ctx.fill();
+  ctx.fillStyle = "#f3ead7";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, x, y);
+  ctx.restore();
+}
+
+function drawMeasurement() {
+  if (!state.measurement) return;
+  const { startX, startY, endX, endY } = state.measurement;
+  const start = cellCenter(startX, startY);
+  const end = cellCenter(endX, endY);
+  const distance = Math.round(Math.hypot(endX - startX, endY - startY) * 5);
+
+  ctx.save();
+  ctx.strokeStyle = "#f3ead7";
+  ctx.lineWidth = 3;
+  ctx.setLineDash([10, 6]);
+  ctx.beginPath();
+  ctx.moveTo(start.x, start.y);
+  ctx.lineTo(end.x, end.y);
+  ctx.stroke();
+
+  ctx.fillStyle = "#d1a850";
+  ctx.beginPath();
+  ctx.arc(start.x, start.y, 5, 0, Math.PI * 2);
+  ctx.arc(end.x, end.y, 5, 0, Math.PI * 2);
+  ctx.fill();
+
+  drawTemplateLabel(`${distance} ft`, (start.x + end.x) / 2, (start.y + end.y) / 2 - 14);
+  ctx.restore();
 }
 
 function drawSelection() {
@@ -903,6 +1088,64 @@ function moveDrag(point) {
   renderCanvas();
 }
 
+function templateSizeFt() {
+  const raw = Number(els.templateSizeInput.value || state.selectedTemplateSize || 20);
+  return clamp(Math.round(raw / 5) * 5, 5, 150);
+}
+
+function startMeasurement(point) {
+  state.measurement = {
+    startX: point.cellX,
+    startY: point.cellY,
+    endX: point.cellX,
+    endY: point.cellY,
+  };
+  drag = { type: "measure" };
+  renderCanvas();
+}
+
+function updateMeasurement(point) {
+  if (!state.measurement) return;
+  state.measurement.endX = point.cellX;
+  state.measurement.endY = point.cellY;
+  renderCanvas();
+}
+
+function startTemplate(point) {
+  const sizeFt = templateSizeFt();
+  const sizeCells = Math.max(1, Math.round(sizeFt / 5));
+  draftTemplate = {
+    id: uid("template"),
+    shape: state.selectedTemplateShape,
+    x: point.cellX,
+    y: point.cellY,
+    endX: clamp(point.cellX + sizeCells, 0, state.cols - 1),
+    endY: point.cellY,
+    sizeFt,
+    color: state.selectedTemplateColor,
+    opacity: state.selectedTemplateOpacity,
+    draft: true,
+  };
+  drag = { type: "template" };
+  renderCanvas();
+}
+
+function updateDraftTemplate(point) {
+  if (!draftTemplate) return;
+  draftTemplate.endX = point.cellX;
+  draftTemplate.endY = point.cellY;
+  renderCanvas();
+}
+
+function commitDraftTemplate() {
+  if (!draftTemplate) return;
+  const template = { ...draftTemplate };
+  delete template.draft;
+  state.templates.push(template);
+  draftTemplate = null;
+  renderAll();
+}
+
 canvas.addEventListener("pointerdown", (event) => {
   canvas.setPointerCapture(event.pointerId);
   const point = canvasPoint(event);
@@ -916,6 +1159,16 @@ canvas.addEventListener("pointerdown", (event) => {
   if (state.activeTool === "paint" || state.activeTool === "erase") {
     drag = { type: "paint" };
     setTerrainAt(point);
+    return;
+  }
+
+  if (state.activeTool === "measure") {
+    startMeasurement(point);
+    return;
+  }
+
+  if (state.activeTool === "template") {
+    startTemplate(point);
     return;
   }
 
@@ -934,18 +1187,30 @@ canvas.addEventListener("pointermove", (event) => {
   const point = canvasPoint(event);
   if (drag.type === "paint") {
     setTerrainAt(point);
+  } else if (drag.type === "measure") {
+    updateMeasurement(point);
+  } else if (drag.type === "template") {
+    updateDraftTemplate(point);
   } else {
     moveDrag(point);
   }
 });
 
 canvas.addEventListener("pointerup", () => {
+  if (drag?.type === "template") {
+    commitDraftTemplate();
+  }
   if (drag) saveState();
   drag = null;
 });
 
 canvas.addEventListener("pointercancel", () => {
-  if (drag) saveState();
+  if (drag?.type === "template") {
+    draftTemplate = null;
+    renderCanvas();
+  } else if (drag) {
+    saveState();
+  }
   drag = null;
 });
 
@@ -958,7 +1223,7 @@ function renderScenes() {
     item.innerHTML = `
       <div>
         <div class="asset-title">${escapeHtml(scene.name)}</div>
-        <div class="asset-meta">${scene.cols} x ${scene.rows}${scene.background ? " · фон" : ""}</div>
+        <div class="asset-meta">${scene.cols} x ${scene.rows}${scene.background ? (scene.backgroundHidden ? " · фон скрыт" : " · фон") : ""}</div>
       </div>
     `;
     item.addEventListener("click", () => {
@@ -1097,6 +1362,7 @@ els.mapBackgroundInput.addEventListener("change", (event) => {
         width: img.naturalWidth,
         height: img.naturalHeight,
       };
+      state.backgroundHidden = false;
       fitGridToBackground();
       imageCache = new Map();
       renderAll();
@@ -1108,6 +1374,7 @@ els.mapBackgroundInput.addEventListener("change", (event) => {
         name: file.name,
         src,
       };
+      state.backgroundHidden = false;
       imageCache = new Map();
       renderAll();
       showToast("Фон карты добавлен.");
@@ -1119,8 +1386,11 @@ els.mapBackgroundInput.addEventListener("change", (event) => {
 });
 
 els.clearBackgroundBtn.addEventListener("click", () => {
-  state.background = null;
-  imageCache = new Map();
+  if (!state.background) {
+    showToast("Фон ещё не загружен.");
+    return;
+  }
+  state.backgroundHidden = !state.backgroundHidden;
   renderAll();
 });
 
@@ -1348,6 +1618,41 @@ els.brushSizeInput.addEventListener("input", (event) => {
   saveState();
 });
 
+els.templateShapeInput.addEventListener("change", (event) => {
+  state.selectedTemplateShape = event.target.value;
+  syncInputs();
+  saveState();
+});
+
+els.templateSizeInput.addEventListener("input", (event) => {
+  state.selectedTemplateSize = clamp(Math.round(Number(event.target.value || 20) / 5) * 5, 5, 150);
+  syncInputs();
+  saveState();
+});
+
+els.templateColorInput.addEventListener("input", (event) => {
+  state.selectedTemplateColor = event.target.value;
+  syncInputs();
+  saveState();
+});
+
+els.templateOpacityInput.addEventListener("input", (event) => {
+  state.selectedTemplateOpacity = Number(event.target.value);
+  syncInputs();
+  saveState();
+});
+
+els.clearMeasureBtn.addEventListener("click", () => {
+  state.measurement = null;
+  renderAll();
+});
+
+els.clearTemplatesBtn.addEventListener("click", () => {
+  state.templates = [];
+  draftTemplate = null;
+  renderAll();
+});
+
 els.topDrawerToggle.addEventListener("click", () => {
   setDrawerCollapsed(!appRoot.classList.contains("drawer-collapsed"));
 });
@@ -1430,6 +1735,8 @@ document.querySelector("#newMapBtn").addEventListener("click", () => {
   state.terrain = {};
   state.tokens = [];
   state.handouts = [];
+  state.templates = [];
+  state.measurement = null;
   state.selectedObject = null;
   renderAll();
   showToast("Создана чистая карта с выбранным размером.");
