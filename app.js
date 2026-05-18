@@ -82,6 +82,7 @@ const toolNames = {
   select: "Выбор",
   measure: "Линейка",
   template: "Шаблон",
+  ping: "Пинг",
 };
 
 const defaultState = {
@@ -105,6 +106,7 @@ const defaultState = {
   handouts: [],
   templates: [],
   measurement: null,
+  pings: [],
   initiative: [],
   activeInitiativeId: null,
   selectedTemplateShape: "circle",
@@ -132,8 +134,10 @@ let toastTimer = null;
 let transientUrls = new Set();
 let syncTimer = null;
 let heartbeatTimer = null;
+let pingAnimationTimer = null;
 const undoStack = [];
 const UNDO_LIMIT = 20;
+const PING_DURATION = 1600;
 
 const sync = {
   online: location.protocol === "http:" || location.protocol === "https:",
@@ -387,6 +391,11 @@ function currentInitiativeTokenIds() {
   return new Set(state.initiative.slice(range.start, range.end + 1).map((entry) => entry.tokenId));
 }
 
+function currentInitiativeFocusTokenId() {
+  normalizeInitiative(state);
+  return state.initiative.find((entry) => entry.id === state.activeInitiativeId)?.tokenId || null;
+}
+
 function backgroundSize() {
   const width = Number(state.background?.width || state.background?.naturalWidth || 0);
   const height = Number(state.background?.height || state.background?.naturalHeight || 0);
@@ -468,6 +477,7 @@ function serializeState(source) {
     ...source,
     selectedObject: source.selectedObject || null,
     scenes: structuredClone(source.scenes || []),
+    pings: (source.pings || []).filter((ping) => Date.now() - Number(ping.createdAt || 0) < PING_DURATION),
     musicTracks: (source.musicTracks || []).filter((track) => !track.transient),
   };
 }
@@ -512,6 +522,7 @@ function applyRemoteState(nextState, revision = sync.revision) {
     ...nextState,
     activeTool: localTool || nextState.activeTool || "paint",
     selectedObject: localSelection,
+    pings: nextState.pings || [],
     musicTracks: (nextState.musicTracks || []).filter((track) => !track.transient),
   };
   normalizeScenes(state);
@@ -729,9 +740,6 @@ function syncInputs() {
   document.querySelectorAll(".tool-button").forEach((button) => {
     button.classList.toggle("active", button.dataset.tool === state.activeTool);
   });
-  document.querySelectorAll(".swatch").forEach((button) => {
-    button.classList.toggle("active", button.dataset.color === state.brushColor);
-  });
 }
 
 function renderAll() {
@@ -767,6 +775,7 @@ function activateDrawerTab(tabName) {
 function renderCanvas() {
   const width = state.cols * state.cell;
   const height = state.rows * state.cell;
+  prunePings();
   ctx.clearRect(0, 0, width, height);
 
   drawBase(width, height);
@@ -775,8 +784,13 @@ function renderCanvas() {
   drawGrid(width, height);
   drawTemplates();
   drawTokens();
+  drawPings();
   drawMeasurement();
   drawSelection();
+}
+
+function screenPx(value) {
+  return value / Math.max(0.3, state.zoom / 100);
 }
 
 function drawBase(width, height) {
@@ -826,9 +840,11 @@ function drawGrid(width, height) {
 
 function drawTokens() {
   const currentTurnTokens = currentInitiativeTokenIds();
+  const focusTokenId = currentInitiativeFocusTokenId();
   state.tokens.forEach((token) => {
     const asset = state.tokenAssets.find((item) => item.id === token.assetId);
     const isCurrentTurn = currentTurnTokens.has(token.id);
+    const isFocusTurn = focusTokenId === token.id;
     const px = token.x * state.cell;
     const py = token.y * state.cell;
     const footprint = tokenFootprint(token) * state.cell;
@@ -854,16 +870,16 @@ function drawTokens() {
     ctx.restore();
 
     ctx.save();
-    ctx.lineWidth = 3;
-    ctx.shadowColor = isCurrentTurn ? "rgba(209, 168, 80, 0.75)" : "transparent";
-    ctx.shadowBlur = isCurrentTurn ? 14 : 0;
+    ctx.lineWidth = isFocusTurn ? 5 : isCurrentTurn ? 4 : 3;
+    ctx.shadowColor = isFocusTurn ? "rgba(255, 218, 112, 0.95)" : isCurrentTurn ? "rgba(209, 168, 80, 0.75)" : "transparent";
+    ctx.shadowBlur = isFocusTurn ? 26 : isCurrentTurn ? 18 : 0;
     ctx.strokeStyle = isCurrentTurn || state.selectedObject?.id === token.id ? "#d1a850" : "#11100f";
     ctx.beginPath();
-    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    ctx.arc(centerX, centerY, radius + (isFocusTurn ? 3 : isCurrentTurn ? 2 : 0), 0, Math.PI * 2);
     ctx.stroke();
     ctx.shadowBlur = 0;
-    ctx.lineWidth = isCurrentTurn ? 2 : 1;
-    ctx.strokeStyle = "rgba(243, 234, 215, 0.85)";
+    ctx.lineWidth = isFocusTurn ? 3 : isCurrentTurn ? 2 : 1;
+    ctx.strokeStyle = isCurrentTurn ? "rgba(255, 248, 214, 0.96)" : "rgba(243, 234, 215, 0.85)";
     ctx.stroke();
     ctx.restore();
 
@@ -914,6 +930,48 @@ function drawHandouts() {
     }
     ctx.restore();
   });
+}
+
+function prunePings() {
+  const now = Date.now();
+  state.pings = (state.pings || []).filter((ping) => now - Number(ping.createdAt || 0) < PING_DURATION);
+}
+
+function drawPings() {
+  const now = Date.now();
+  const visiblePings = (state.pings || []).filter((ping) => ping.sceneId === state.activeSceneId);
+  visiblePings
+    .forEach((ping) => {
+      const age = now - Number(ping.createdAt || now);
+      const progress = clamp(age / PING_DURATION, 0, 1);
+      const x = ping.x * state.cell + state.cell / 2;
+      const y = ping.y * state.cell + state.cell / 2;
+      const radius = state.cell * (0.38 + progress * 0.9);
+      const alpha = 1 - progress;
+
+      ctx.save();
+      ctx.strokeStyle = `rgba(255, 218, 112, ${alpha})`;
+      ctx.fillStyle = `rgba(209, 168, 80, ${alpha * 0.2})`;
+      ctx.lineWidth = screenPx(3);
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(screenPx(4), state.cell * 0.08), 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255, 248, 214, ${alpha})`;
+      ctx.fill();
+      ctx.restore();
+    });
+  if (visiblePings.length) schedulePingFrame();
+}
+
+function schedulePingFrame() {
+  if (pingAnimationTimer) return;
+  pingAnimationTimer = window.setTimeout(() => {
+    pingAnimationTimer = null;
+    renderCanvas();
+  }, 80);
 }
 
 function templateColor(template, alphaMultiplier = 1) {
@@ -969,12 +1027,12 @@ function drawTemplates() {
       ctx.arc(start.x, start.y, radius, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
-      drawTemplateLabel(`${template.sizeFt} ft`, start.x, start.y - radius - 8);
+      drawTemplateLabel(`${template.sizeFt} ft`, start.x, start.y - radius - screenPx(18));
     } else if (template.shape === "square") {
       const side = sizeCells * state.cell;
       ctx.fillRect(start.x - side / 2, start.y - side / 2, side, side);
       ctx.strokeRect(start.x - side / 2, start.y - side / 2, side, side);
-      drawTemplateLabel(`${template.sizeFt} ft`, start.x, start.y - side / 2 - 8);
+      drawTemplateLabel(`${template.sizeFt} ft`, start.x, start.y - side / 2 - screenPx(18));
     } else if (template.shape === "line") {
       const length = sizeCells * state.cell;
       const width = state.cell;
@@ -993,7 +1051,7 @@ function drawTemplates() {
       ctx.moveTo(start.x, start.y);
       ctx.lineTo(x2, y2);
       ctx.stroke();
-      drawTemplateLabel(`${template.sizeFt} ft`, (start.x + x2) / 2, (start.y + y2) / 2 - 12);
+      drawTemplateLabel(`${template.sizeFt} ft`, (start.x + x2) / 2, (start.y + y2) / 2 - screenPx(18));
     } else if (template.shape === "cone") {
       const length = sizeCells * state.cell;
       const spread = Math.PI / 6;
@@ -1022,12 +1080,18 @@ function drawTemplates() {
 
 function drawTemplateLabel(label, x, y) {
   ctx.save();
-  ctx.font = "12px Inter, system-ui, sans-serif";
-  const width = ctx.measureText(label).width + 14;
-  ctx.fillStyle = "rgba(17, 16, 15, 0.82)";
-  roundRect(x - width / 2, y - 10, width, 20, 5);
+  const fontSize = screenPx(17);
+  const padX = screenPx(10);
+  const height = screenPx(28);
+  ctx.font = `800 ${fontSize}px Inter, system-ui, sans-serif`;
+  const width = ctx.measureText(label).width + padX * 2;
+  ctx.fillStyle = "rgba(17, 16, 15, 0.9)";
+  roundRect(x - width / 2, y - height / 2, width, height, screenPx(7));
   ctx.fill();
-  ctx.fillStyle = "#f3ead7";
+  ctx.lineWidth = screenPx(1.5);
+  ctx.strokeStyle = "rgba(209, 168, 80, 0.72)";
+  ctx.stroke();
+  ctx.fillStyle = "#fff2c4";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(label, x, y);
@@ -1056,7 +1120,7 @@ function drawMeasurement() {
   ctx.arc(end.x, end.y, 5, 0, Math.PI * 2);
   ctx.fill();
 
-  drawTemplateLabel(`${distance} ft`, (start.x + end.x) / 2, (start.y + end.y) / 2 - 14);
+  drawTemplateLabel(`${distance} ft`, (start.x + end.x) / 2, (start.y + end.y) / 2 - screenPx(20));
   ctx.restore();
 }
 
@@ -1318,6 +1382,24 @@ function commitDraftTemplate() {
   renderAll();
 }
 
+function placePing(point) {
+  state.pings = [
+    ...(state.pings || []).filter((ping) => ping.sceneId === state.activeSceneId),
+    {
+      id: uid("ping"),
+      sceneId: state.activeSceneId,
+      x: point.cellX,
+      y: point.cellY,
+      createdAt: Date.now(),
+    },
+  ].slice(-6);
+  renderAll();
+  window.setTimeout(() => {
+    prunePings();
+    renderAll();
+  }, PING_DURATION + 80);
+}
+
 canvas.addEventListener("pointerdown", (event) => {
   canvas.setPointerCapture(event.pointerId);
   const point = canvasPoint(event);
@@ -1345,6 +1427,11 @@ canvas.addEventListener("pointerdown", (event) => {
   if (state.activeTool === "template") {
     captureUndo();
     startTemplate(point);
+    return;
+  }
+
+  if (state.activeTool === "ping") {
+    placePing(point);
     return;
   }
 
@@ -1510,8 +1597,9 @@ function renderInitiative() {
     const token = state.tokens.find((item) => item.id === entry.tokenId);
     const asset = state.tokenAssets.find((item) => item.id === token?.assetId);
     const isActive = activeGroup.has(entry.tokenId);
+    const isFocus = entry.id === state.activeInitiativeId;
     const item = document.createElement("div");
-    item.className = `initiative-item ${isActive ? "active-turn" : ""} side-${entry.side}`;
+    item.className = `initiative-item ${isActive ? "active-turn" : ""} ${isFocus ? "active-focus" : ""} side-${entry.side}`;
     item.innerHTML = `
       <div class="initiative-rank">${index + 1}</div>
       ${
@@ -1897,13 +1985,6 @@ document.querySelectorAll(".tool-button").forEach((button) => {
   });
 });
 
-document.querySelectorAll(".swatch").forEach((button) => {
-  button.addEventListener("click", () => {
-    state.brushColor = button.dataset.color;
-    renderAll();
-  });
-});
-
 els.brushColorInput.addEventListener("input", (event) => {
   state.brushColor = event.target.value;
   syncInputs();
@@ -2169,15 +2250,37 @@ window.addEventListener("keydown", (event) => {
     undoLastAction();
     return;
   }
+  const toolShortcutMap = {
+    Digit1: "select",
+    Numpad1: "select",
+    Digit2: "paint",
+    Numpad2: "paint",
+    Digit3: "erase",
+    Numpad3: "erase",
+    Digit4: "measure",
+    Numpad4: "measure",
+    Digit5: "template",
+    Numpad5: "template",
+    Digit6: "ping",
+    Numpad6: "ping",
+  };
   const keyMap = {
+    v: "select",
     b: "paint",
     e: "erase",
-    t: "token",
-    i: "image",
-    v: "select",
+    l: "measure",
+    t: "template",
+    p: "ping",
+    м: "select",
+    и: "paint",
+    у: "erase",
+    д: "measure",
+    е: "template",
+    з: "ping",
   };
-  if (keyMap[key]) {
-    state.activeTool = keyMap[key];
+  const nextTool = toolShortcutMap[event.code] || keyMap[key];
+  if (nextTool) {
+    state.activeTool = nextTool;
     renderAll();
   }
   if (event.key === "Delete" && state.selectedObject) {
