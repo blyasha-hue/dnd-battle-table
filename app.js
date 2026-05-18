@@ -61,6 +61,10 @@ const els = {
   templateOpacityInput: document.querySelector("#templateOpacityInput"),
   clearMeasureBtn: document.querySelector("#clearMeasureBtn"),
   clearTemplatesBtn: document.querySelector("#clearTemplatesBtn"),
+  nextInitiativeBtn: document.querySelector("#nextInitiativeBtn"),
+  collectInitiativeBtn: document.querySelector("#collectInitiativeBtn"),
+  clearInitiativeBtn: document.querySelector("#clearInitiativeBtn"),
+  initiativeList: document.querySelector("#initiativeList"),
   musicUrlInput: document.querySelector("#musicUrlInput"),
   musicNameInput: document.querySelector("#musicNameInput"),
   musicFileInput: document.querySelector("#musicFileInput"),
@@ -101,6 +105,8 @@ const defaultState = {
   handouts: [],
   templates: [],
   measurement: null,
+  initiative: [],
+  activeInitiativeId: null,
   selectedTemplateShape: "circle",
   selectedTemplateSize: 20,
   selectedTemplateCenter: "cell",
@@ -228,6 +234,8 @@ function sceneFromState(source, overrides = {}) {
     handouts: structuredClone(source.handouts || []),
     templates: structuredClone(source.templates || []),
     measurement: source.measurement ? structuredClone(source.measurement) : null,
+    initiative: structuredClone(source.initiative || []),
+    activeInitiativeId: source.activeInitiativeId || null,
   };
 }
 
@@ -246,6 +254,8 @@ function blankScene(name = "Новая сцена") {
     handouts: [],
     templates: [],
     measurement: null,
+    initiative: [],
+    activeInitiativeId: null,
   };
 }
 
@@ -264,6 +274,8 @@ function normalizeScenes(target) {
     handouts: scene.handouts || [],
     templates: scene.templates || [],
     measurement: scene.measurement || null,
+    initiative: scene.initiative || [],
+    activeInitiativeId: scene.activeInitiativeId || null,
     background: scene.background || null,
     backgroundHidden: scene.backgroundHidden === true,
   }));
@@ -299,6 +311,9 @@ function applySceneToState(target, scene) {
   target.handouts = structuredClone(scene.handouts || []);
   target.templates = structuredClone(scene.templates || []);
   target.measurement = scene.measurement ? structuredClone(scene.measurement) : null;
+  target.initiative = structuredClone(scene.initiative || []);
+  target.activeInitiativeId = scene.activeInitiativeId || null;
+  normalizeInitiative(target);
   target.selectedObject = null;
 }
 
@@ -309,6 +324,67 @@ function tokenFootprint(token) {
 function tokenVisualSize(token) {
   const footprint = tokenFootprint(token);
   return clamp(Number(token.visualSize ?? token.size) || footprint, 0.5, footprint);
+}
+
+function tokenDisplayName(token) {
+  const asset = state.tokenAssets.find((item) => item.id === token.assetId);
+  return token.name || asset?.name?.replace(/\.[^.]+$/, "") || "Фигурка";
+}
+
+function initiativeSide(value) {
+  return ["ally", "enemy", "neutral"].includes(value) ? value : "neutral";
+}
+
+function normalizeInitiative(target = state) {
+  const tokens = Array.isArray(target.tokens) ? target.tokens : [];
+  const tokenById = new Map(tokens.map((token) => [token.id, token]));
+  const seen = new Set();
+
+  target.initiative = (target.initiative || [])
+    .filter((entry) => entry?.tokenId && tokenById.has(entry.tokenId) && !seen.has(entry.tokenId) && seen.add(entry.tokenId))
+    .map((entry) => {
+      const token = tokenById.get(entry.tokenId);
+      const asset = target.tokenAssets?.find((item) => item.id === token.assetId);
+      return {
+        id: entry.id || uid("initiative"),
+        tokenId: entry.tokenId,
+        name: entry.name || token.name || asset?.name?.replace(/\.[^.]+$/, "") || "Фигурка",
+        value: Number.isFinite(Number(entry.value)) ? Number(entry.value) : 10,
+        side: initiativeSide(entry.side),
+      };
+    });
+
+  if (!target.initiative.some((entry) => entry.id === target.activeInitiativeId)) {
+    target.activeInitiativeId = target.initiative[0]?.id || null;
+  }
+}
+
+function sortInitiative() {
+  const activeId = state.activeInitiativeId;
+  state.initiative.sort((a, b) => Number(b.value) - Number(a.value) || a.name.localeCompare(b.name, "ru"));
+  state.activeInitiativeId = state.initiative.some((entry) => entry.id === activeId) ? activeId : state.initiative[0]?.id || null;
+}
+
+function initiativeGroupRange() {
+  normalizeInitiative(state);
+  if (!state.initiative.length) return null;
+  const activeIndex = Math.max(0, state.initiative.findIndex((entry) => entry.id === state.activeInitiativeId));
+  const active = state.initiative[activeIndex];
+  let start = activeIndex;
+  let end = activeIndex;
+
+  if (active.side !== "neutral") {
+    while (start > 0 && state.initiative[start - 1].side === active.side) start -= 1;
+    while (end < state.initiative.length - 1 && state.initiative[end + 1].side === active.side) end += 1;
+  }
+
+  return { start, end };
+}
+
+function currentInitiativeTokenIds() {
+  const range = initiativeGroupRange();
+  if (!range) return new Set();
+  return new Set(state.initiative.slice(range.start, range.end + 1).map((entry) => entry.tokenId));
 }
 
 function backgroundSize() {
@@ -664,6 +740,7 @@ function renderAll() {
   resizeCanvas();
   renderScenes();
   renderAssets();
+  renderInitiative();
   renderMusic();
   renderRollLog();
   saveState();
@@ -748,8 +825,10 @@ function drawGrid(width, height) {
 }
 
 function drawTokens() {
+  const currentTurnTokens = currentInitiativeTokenIds();
   state.tokens.forEach((token) => {
     const asset = state.tokenAssets.find((item) => item.id === token.assetId);
+    const isCurrentTurn = currentTurnTokens.has(token.id);
     const px = token.x * state.cell;
     const py = token.y * state.cell;
     const footprint = tokenFootprint(token) * state.cell;
@@ -776,11 +855,14 @@ function drawTokens() {
 
     ctx.save();
     ctx.lineWidth = 3;
-    ctx.strokeStyle = state.selectedObject?.id === token.id ? "#d1a850" : "#11100f";
+    ctx.shadowColor = isCurrentTurn ? "rgba(209, 168, 80, 0.75)" : "transparent";
+    ctx.shadowBlur = isCurrentTurn ? 14 : 0;
+    ctx.strokeStyle = isCurrentTurn || state.selectedObject?.id === token.id ? "#d1a850" : "#11100f";
     ctx.beginPath();
     ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.lineWidth = 1;
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = isCurrentTurn ? 2 : 1;
     ctx.strokeStyle = "rgba(243, 234, 215, 0.85)";
     ctx.stroke();
     ctx.restore();
@@ -1403,6 +1485,130 @@ function renderAssetList({ container, assets, selectedId, type }) {
   });
 }
 
+function renderInitiative() {
+  normalizeInitiative(state);
+  els.initiativeList.innerHTML = "";
+
+  if (!state.tokens.length) {
+    const empty = document.createElement("div");
+    empty.className = "initiative-empty";
+    empty.textContent = "Поставь фигурки на карту.";
+    els.initiativeList.appendChild(empty);
+    return;
+  }
+
+  if (!state.initiative.length) {
+    const empty = document.createElement("div");
+    empty.className = "initiative-empty";
+    empty.textContent = "Нажми «Собрать с карты».";
+    els.initiativeList.appendChild(empty);
+    return;
+  }
+
+  const activeGroup = currentInitiativeTokenIds();
+  state.initiative.forEach((entry, index) => {
+    const token = state.tokens.find((item) => item.id === entry.tokenId);
+    const asset = state.tokenAssets.find((item) => item.id === token?.assetId);
+    const isActive = activeGroup.has(entry.tokenId);
+    const item = document.createElement("div");
+    item.className = `initiative-item ${isActive ? "active-turn" : ""} side-${entry.side}`;
+    item.innerHTML = `
+      <div class="initiative-rank">${index + 1}</div>
+      ${
+        asset
+          ? `<img class="initiative-thumb" src="${asset.src}" alt="">`
+          : `<div class="initiative-thumb initiative-fallback">${escapeHtml(entry.name.slice(0, 1).toUpperCase())}</div>`
+      }
+      <div class="initiative-main">
+        <button class="initiative-name" type="button">${escapeHtml(entry.name)}</button>
+        <div class="initiative-controls">
+          <input class="initiative-score" type="number" value="${Number(entry.value)}" aria-label="Инициатива">
+          <select class="initiative-side" aria-label="Сторона">
+            <option value="ally" ${entry.side === "ally" ? "selected" : ""}>Союзник</option>
+            <option value="enemy" ${entry.side === "enemy" ? "selected" : ""}>Враг</option>
+            <option value="neutral" ${entry.side === "neutral" ? "selected" : ""}>Нейтрал</option>
+          </select>
+        </div>
+      </div>
+      <button class="icon-action initiative-remove" type="button" aria-label="Убрать из инициативы">×</button>
+    `;
+
+    item.querySelector(".initiative-name").addEventListener("click", () => {
+      captureUndo();
+      state.activeInitiativeId = entry.id;
+      if (token) state.selectedObject = { type: "token", id: token.id };
+      renderAll();
+    });
+
+    item.querySelector(".initiative-score").addEventListener("change", (event) => {
+      captureUndo();
+      entry.value = Number(event.target.value) || 0;
+      sortInitiative();
+      renderAll();
+    });
+
+    item.querySelector(".initiative-side").addEventListener("change", (event) => {
+      captureUndo();
+      entry.side = initiativeSide(event.target.value);
+      renderAll();
+    });
+
+    item.querySelector(".initiative-remove").addEventListener("click", () => {
+      captureUndo();
+      state.initiative = state.initiative.filter((itemEntry) => itemEntry.id !== entry.id);
+      if (state.activeInitiativeId === entry.id) {
+        state.activeInitiativeId = state.initiative[0]?.id || null;
+      }
+      renderAll();
+    });
+
+    els.initiativeList.appendChild(item);
+  });
+}
+
+function collectInitiativeFromMap() {
+  if (!state.tokens.length) {
+    showToast("Сначала поставь фигурки на карту.");
+    return;
+  }
+
+  captureUndo();
+  const previous = new Map((state.initiative || []).map((entry) => [entry.tokenId, entry]));
+  state.initiative = state.tokens.map((token) => {
+    const old = previous.get(token.id);
+    return {
+      id: old?.id || uid("initiative"),
+      tokenId: token.id,
+      name: old?.name || tokenDisplayName(token),
+      value: Number.isFinite(Number(old?.value)) ? Number(old.value) : 10,
+      side: initiativeSide(old?.side),
+    };
+  });
+  sortInitiative();
+  state.activeInitiativeId = state.activeInitiativeId || state.initiative[0]?.id || null;
+  renderAll();
+}
+
+function nextInitiativeTurn() {
+  normalizeInitiative(state);
+  if (!state.initiative.length) {
+    showToast("Сначала собери инициативу с карты.");
+    return;
+  }
+
+  captureUndo();
+  if (!state.activeInitiativeId) {
+    state.activeInitiativeId = state.initiative[0].id;
+    renderAll();
+    return;
+  }
+
+  const range = initiativeGroupRange();
+  const nextIndex = range ? (range.end + 1) % state.initiative.length : 0;
+  state.activeInitiativeId = state.initiative[nextIndex].id;
+  renderAll();
+}
+
 function addImageFiles(files, type) {
   [...files].forEach((file) => {
     if (!file.type.startsWith("image/")) return;
@@ -1759,6 +1965,17 @@ els.clearTemplatesBtn.addEventListener("click", () => {
   renderAll();
 });
 
+els.collectInitiativeBtn.addEventListener("click", collectInitiativeFromMap);
+
+els.nextInitiativeBtn.addEventListener("click", nextInitiativeTurn);
+
+els.clearInitiativeBtn.addEventListener("click", () => {
+  captureUndo();
+  state.initiative = [];
+  state.activeInitiativeId = null;
+  renderAll();
+});
+
 els.topDrawerToggle.addEventListener("click", () => {
   setDrawerCollapsed(!appRoot.classList.contains("drawer-collapsed"));
 });
@@ -1853,6 +2070,8 @@ document.querySelector("#newMapBtn").addEventListener("click", () => {
   state.handouts = [];
   state.templates = [];
   state.measurement = null;
+  state.initiative = [];
+  state.activeInitiativeId = null;
   state.selectedObject = null;
   renderAll();
   showToast("Создана чистая карта с выбранным размером.");
@@ -1868,6 +2087,8 @@ document.querySelector("#clearTokensBtn").addEventListener("click", () => {
   captureUndo();
   state.tokens = [];
   state.handouts = [];
+  state.initiative = [];
+  state.activeInitiativeId = null;
   state.selectedObject = null;
   renderAll();
 });
@@ -1941,7 +2162,9 @@ function escapeHtml(value) {
 
 window.addEventListener("keydown", (event) => {
   if (event.target?.matches?.("input, textarea, select")) return;
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z" && !event.shiftKey) {
+  const key = event.key.toLowerCase();
+  const isUndoKey = key === "z" || key === "я" || event.code === "KeyZ";
+  if ((event.ctrlKey || event.metaKey) && isUndoKey && !event.shiftKey) {
     event.preventDefault();
     undoLastAction();
     return;
@@ -1953,8 +2176,8 @@ window.addEventListener("keydown", (event) => {
     i: "image",
     v: "select",
   };
-  if (keyMap[event.key.toLowerCase()]) {
-    state.activeTool = keyMap[event.key.toLowerCase()];
+  if (keyMap[key]) {
+    state.activeTool = keyMap[key];
     renderAll();
   }
   if (event.key === "Delete" && state.selectedObject) {
