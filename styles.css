@@ -178,17 +178,46 @@ h1 {
   background: rgba(193, 102, 85, 0.14);
 }
 
-.layout {
-  display: grid;
-  grid-template-columns: minmax(260px, 320px) minmax(420px, 1fr) minmax(300px, 380px);
-  gap: 16px;
-  padding: 16px;
+.top-drawer {
+  border-bottom: 1px solid var(--line);
+  background: rgba(18, 17, 15, 0.94);
+  padding: 12px;
 }
 
-.sidebar {
+.app.drawer-collapsed .top-drawer {
+  display: none;
+}
+
+.drawer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  max-height: 330px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.music-panel-wide {
+  grid-column: span 2;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 12px;
+}
+
+.combat-rail {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  max-height: calc(100vh - 104px);
+  overflow: auto;
+  padding-right: 2px;
+  position: sticky;
+  top: 88px;
 }
 
 .panel {
@@ -403,6 +432,11 @@ h1 {
   margin-top: 14px;
 }
 
+.paint-controls strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+
 .swatches {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
@@ -420,6 +454,33 @@ h1 {
   outline-offset: 2px;
 }
 
+.brush-preview {
+  height: 34px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.12) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.12) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.12) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.12) 75%);
+  background-color: #11100f;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+  background-size: 16px 16px;
+  overflow: hidden;
+}
+
+.brush-preview::before {
+  content: "";
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--brush-preview, #6f8f53);
+}
+
 .battle-area {
   min-width: 0;
   display: flex;
@@ -429,6 +490,7 @@ h1 {
   background: #181714;
   box-shadow: var(--shadow);
   overflow: hidden;
+  min-height: calc(100vh - 104px);
 }
 
 .battle-header {
@@ -453,8 +515,8 @@ h1 {
 
 .canvas-shell {
   flex: 1;
-  min-height: 620px;
-  max-height: calc(100vh - 180px);
+  min-height: 0;
+  max-height: none;
   overflow: auto;
   background:
     linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
@@ -622,17 +684,12 @@ audio {
 }
 
 @media (max-width: 1180px) {
-  .layout {
-    grid-template-columns: 1fr;
+  .workspace {
+    grid-template-columns: 260px minmax(0, 1fr);
   }
 
-  .sidebar {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .battle-area {
-    min-height: 680px;
+  .music-panel-wide {
+    grid-column: auto;
   }
 }
 
@@ -643,12 +700,14 @@ audio {
     flex-direction: column;
   }
 
-  .layout {
+  .workspace {
+    grid-template-columns: 1fr;
     padding: 10px;
   }
 
-  .sidebar {
-    grid-template-columns: 1fr;
+  .combat-rail {
+    max-height: none;
+    position: static;
   }
 
   .canvas-shell {

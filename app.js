@@ -14,9 +14,11 @@ const canvas = document.querySelector("#battleCanvas");
 const ctx = canvas.getContext("2d");
 const canvasShell = document.querySelector("#canvasShell");
 const toast = document.querySelector("#toast");
+const appRoot = document.querySelector(".app");
 
 const els = {
   autosaveStatus: document.querySelector("#autosaveStatus"),
+  topDrawerToggle: document.querySelector("#topDrawerToggle"),
   onlineStatus: document.querySelector("#onlineStatus"),
   roomInput: document.querySelector("#roomInput"),
   joinRoomBtn: document.querySelector("#joinRoomBtn"),
@@ -34,6 +36,13 @@ const els = {
   mapBackgroundInput: document.querySelector("#mapBackgroundInput"),
   clearBackgroundBtn: document.querySelector("#clearBackgroundBtn"),
   brushColorInput: document.querySelector("#brushColorInput"),
+  brushLightInput: document.querySelector("#brushLightInput"),
+  brushLightValue: document.querySelector("#brushLightValue"),
+  brushOpacityInput: document.querySelector("#brushOpacityInput"),
+  brushOpacityValue: document.querySelector("#brushOpacityValue"),
+  brushSizeInput: document.querySelector("#brushSizeInput"),
+  brushSizeValue: document.querySelector("#brushSizeValue"),
+  brushPreview: document.querySelector("#brushPreview"),
   sceneNameInput: document.querySelector("#sceneNameInput"),
   sceneList: document.querySelector("#sceneList"),
   newSceneBtn: document.querySelector("#newSceneBtn"),
@@ -74,6 +83,9 @@ const defaultState = {
   background: null,
   activeTool: "paint",
   brushColor: "#6f8f53",
+  brushLight: 100,
+  brushOpacity: 100,
+  brushSize: 1,
   terrain: {},
   tokenAssets: [],
   handoutAssets: [],
@@ -115,6 +127,32 @@ function uid(prefix) {
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function hexToRgb(hex) {
+  const clean = String(hex || "#000000").replace("#", "");
+  const full = clean.length === 3 ? clean.split("").map((char) => char + char).join("") : clean;
+  const value = Number.parseInt(full, 16);
+  return {
+    r: (value >> 16) & 255,
+    g: (value >> 8) & 255,
+    b: value & 255,
+  };
+}
+
+function brushColorString(color = state.brushColor, light = state.brushLight, opacity = state.brushOpacity) {
+  const rgb = hexToRgb(color);
+  const factor = clamp(Number(light) || 100, 40, 160) / 100;
+  const alpha = clamp(Number(opacity) || 100, 10, 100) / 100;
+  const r = Math.round(clamp(rgb.r * factor, 0, 255));
+  const g = Math.round(clamp(rgb.g * factor, 0, 255));
+  const b = Math.round(clamp(rgb.b * factor, 0, 255));
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function terrainFill(value) {
+  if (!value || typeof value === "string") return value || state.brushColor;
+  return brushColorString(value.color, value.light, value.opacity);
 }
 
 function safeStorageGet(storage, key) {
@@ -498,6 +536,13 @@ function syncInputs() {
   els.zoomInput.value = state.zoom;
   els.gridToggle.checked = state.showGrid;
   els.brushColorInput.value = state.brushColor;
+  els.brushLightInput.value = state.brushLight;
+  els.brushLightValue.textContent = `${state.brushLight}%`;
+  els.brushOpacityInput.value = state.brushOpacity;
+  els.brushOpacityValue.textContent = `${state.brushOpacity}%`;
+  els.brushSizeInput.value = state.brushSize;
+  els.brushSizeValue.textContent = state.brushSize;
+  els.brushPreview.style.setProperty("--brush-preview", brushColorString());
   els.sceneNameInput.value = state.sceneName;
 
   document.querySelectorAll(".tool-button").forEach((button) => {
@@ -517,6 +562,12 @@ function renderAll() {
   renderMusic();
   renderRollLog();
   saveState();
+}
+
+function setDrawerCollapsed(collapsed) {
+  appRoot.classList.toggle("drawer-collapsed", collapsed);
+  els.topDrawerToggle.textContent = collapsed ? "Развернуть верх" : "Свернуть верх";
+  safeStorageSet(localStorage, "dnd-battle-table-drawer-collapsed", collapsed ? "1" : "0");
 }
 
 function renderCanvas() {
@@ -552,7 +603,7 @@ function drawBase(width, height) {
 function drawTerrain() {
   Object.entries(state.terrain).forEach(([key, color]) => {
     const [x, y] = key.split(",").map(Number);
-    ctx.fillStyle = color;
+    ctx.fillStyle = terrainFill(color);
     ctx.fillRect(x * state.cell, y * state.cell, state.cell, state.cell);
     ctx.fillStyle = "rgba(0, 0, 0, 0.12)";
     ctx.fillRect(x * state.cell, y * state.cell + state.cell * 0.72, state.cell, state.cell * 0.28);
@@ -717,11 +768,22 @@ function canvasPoint(event) {
 }
 
 function setTerrainAt(point) {
-  const key = `${point.cellX},${point.cellY}`;
-  if (state.activeTool === "erase") {
-    delete state.terrain[key];
-  } else {
-    state.terrain[key] = state.brushColor;
+  const size = clamp(Number(state.brushSize) || 1, 1, 8);
+  const offset = Math.floor((size - 1) / 2);
+  for (let y = point.cellY - offset; y < point.cellY - offset + size; y += 1) {
+    for (let x = point.cellX - offset; x < point.cellX - offset + size; x += 1) {
+      if (x < 0 || y < 0 || x >= state.cols || y >= state.rows) continue;
+      const key = `${x},${y}`;
+      if (state.activeTool === "erase") {
+        delete state.terrain[key];
+      } else {
+        state.terrain[key] = {
+          color: state.brushColor,
+          light: state.brushLight,
+          opacity: state.brushOpacity,
+        };
+      }
+    }
   }
   renderCanvas();
   saveState();
@@ -1266,6 +1328,28 @@ els.brushColorInput.addEventListener("input", (event) => {
   saveState();
 });
 
+els.brushLightInput.addEventListener("input", (event) => {
+  state.brushLight = Number(event.target.value);
+  syncInputs();
+  saveState();
+});
+
+els.brushOpacityInput.addEventListener("input", (event) => {
+  state.brushOpacity = Number(event.target.value);
+  syncInputs();
+  saveState();
+});
+
+els.brushSizeInput.addEventListener("input", (event) => {
+  state.brushSize = Number(event.target.value);
+  syncInputs();
+  saveState();
+});
+
+els.topDrawerToggle.addEventListener("click", () => {
+  setDrawerCollapsed(!appRoot.classList.contains("drawer-collapsed"));
+});
+
 els.sceneNameInput.addEventListener("input", (event) => {
   state.sceneName = event.target.value || "Без названия";
   const scene = getActiveScene();
@@ -1448,5 +1532,6 @@ window.addEventListener("beforeunload", () => {
   transientUrls.forEach((src) => URL.revokeObjectURL(src));
 });
 
+setDrawerCollapsed(safeStorageGet(localStorage, "dnd-battle-table-drawer-collapsed") === "1");
 renderAll();
 connectOnline();

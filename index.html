@@ -18,6 +18,7 @@
         </div>
 
         <div class="top-actions" aria-label="Действия сцены">
+          <button class="ghost-button" id="topDrawerToggle" type="button">Свернуть верх</button>
           <button class="ghost-button" id="exportSceneBtn" type="button">Экспорт</button>
           <label class="ghost-button file-button">
             Импорт
@@ -27,8 +28,8 @@
         </div>
       </header>
 
-      <main class="layout">
-        <aside class="sidebar left-tools" aria-label="Инструменты карты">
+      <section class="top-drawer" id="topDrawer" aria-label="Настройки кампании">
+        <div class="drawer-grid">
           <section class="panel online-panel">
             <div class="panel-heading">
               <h2>Онлайн</h2>
@@ -85,47 +86,6 @@
           </section>
 
           <section class="panel">
-            <h2>Инструмент</h2>
-            <div class="tool-grid" role="group" aria-label="Инструменты поля">
-              <button class="tool-button active" data-tool="paint" type="button" title="Рисовать">
-                <span class="tool-icon brush-icon"></span>
-                <span>Кисть</span>
-              </button>
-              <button class="tool-button" data-tool="erase" type="button" title="Стереть">
-                <span class="tool-icon erase-icon"></span>
-                <span>Ластик</span>
-              </button>
-              <button class="tool-button" data-tool="token" type="button" title="Фигурки">
-                <span class="tool-icon token-icon"></span>
-                <span>Фигурки</span>
-              </button>
-              <button class="tool-button" data-tool="image" type="button" title="Картинки">
-                <span class="tool-icon image-icon"></span>
-                <span>Картинки</span>
-              </button>
-              <button class="tool-button" data-tool="select" type="button" title="Выбор">
-                <span class="tool-icon select-icon"></span>
-                <span>Выбор</span>
-              </button>
-            </div>
-
-            <div class="paint-controls">
-              <label>
-                <span>Цвет</span>
-                <input id="brushColorInput" type="color" value="#6f8f53" />
-              </label>
-              <div class="swatches" aria-label="Цвета кисти">
-                <button class="swatch active" style="--swatch: #6f8f53" data-color="#6f8f53" type="button" title="Трава"></button>
-                <button class="swatch" style="--swatch: #9c7a48" data-color="#9c7a48" type="button" title="Земля"></button>
-                <button class="swatch" style="--swatch: #496f83" data-color="#496f83" type="button" title="Вода"></button>
-                <button class="swatch" style="--swatch: #8b8d89" data-color="#8b8d89" type="button" title="Камень"></button>
-                <button class="swatch" style="--swatch: #b65345" data-color="#b65345" type="button" title="Опасность"></button>
-                <button class="swatch" style="--swatch: #c6a64d" data-color="#c6a64d" type="button" title="Свет"></button>
-              </div>
-            </div>
-          </section>
-
-          <section class="panel">
             <div class="panel-heading">
               <h2>Сцены</h2>
               <button class="mini-button" id="newSceneBtn" type="button">+</button>
@@ -144,22 +104,7 @@
               <button id="clearTokensBtn" type="button">Убрать фигуры</button>
             </div>
           </section>
-        </aside>
 
-        <section class="battle-area" aria-label="Поле битвы">
-          <div class="battle-header">
-            <div>
-              <h2 id="sceneTitle">Засада у старой дороги</h2>
-              <p id="sceneMeta">24 x 16 клеток</p>
-            </div>
-            <div class="mode-chip" id="modeChip">Кисть</div>
-          </div>
-          <div class="canvas-shell" id="canvasShell">
-            <canvas id="battleCanvas" aria-label="Карта боя"></canvas>
-          </div>
-        </section>
-
-        <aside class="sidebar right-tools" aria-label="Панели партии">
           <section class="panel">
             <div class="panel-heading">
               <h2>Библиотека фигурок</h2>
@@ -171,7 +116,7 @@
             <div class="field-grid two">
               <label>
                 <span>Имя</span>
-                <input id="tokenNameInput" type="text" placeholder="Гоблин, паладин..." maxlength="24" />
+                <input id="tokenNameInput" type="text" placeholder="Герой, страж..." maxlength="24" />
               </label>
               <label>
                 <span>Размер</span>
@@ -202,7 +147,7 @@
             <div class="asset-list" id="handoutAssets"></div>
           </section>
 
-          <section class="panel">
+          <section class="panel music-panel-wide">
             <h2>Музыка</h2>
             <div class="field-grid">
               <label>
@@ -223,6 +168,64 @@
             </div>
             <audio id="audioPlayer" controls loop></audio>
             <div class="music-list" id="musicList"></div>
+          </section>
+        </div>
+      </section>
+
+      <main class="workspace">
+        <aside class="combat-rail" aria-label="Боевые инструменты">
+          <section class="panel">
+            <h2>Инструмент</h2>
+            <div class="tool-grid" role="group" aria-label="Инструменты поля">
+              <button class="tool-button active" data-tool="paint" type="button" title="Рисовать">
+                <span class="tool-icon brush-icon"></span>
+                <span>Кисть</span>
+              </button>
+              <button class="tool-button" data-tool="erase" type="button" title="Стереть">
+                <span class="tool-icon erase-icon"></span>
+                <span>Ластик</span>
+              </button>
+              <button class="tool-button" data-tool="token" type="button" title="Фигурки">
+                <span class="tool-icon token-icon"></span>
+                <span>Фигурки</span>
+              </button>
+              <button class="tool-button" data-tool="image" type="button" title="Картинки">
+                <span class="tool-icon image-icon"></span>
+                <span>Картинки</span>
+              </button>
+              <button class="tool-button" data-tool="select" type="button" title="Выбор">
+                <span class="tool-icon select-icon"></span>
+                <span>Выбор</span>
+              </button>
+            </div>
+
+            <div class="paint-controls">
+              <label>
+                <span>Цвет</span>
+                <input id="brushColorInput" type="color" value="#6f8f53" />
+              </label>
+              <label>
+                <span>Свет / тень: <strong id="brushLightValue">100%</strong></span>
+                <input id="brushLightInput" type="range" min="40" max="160" value="100" />
+              </label>
+              <label>
+                <span>Прозрачность: <strong id="brushOpacityValue">100%</strong></span>
+                <input id="brushOpacityInput" type="range" min="10" max="100" value="100" />
+              </label>
+              <label>
+                <span>Размер кисти: <strong id="brushSizeValue">1</strong></span>
+                <input id="brushSizeInput" type="range" min="1" max="8" value="1" />
+              </label>
+              <div class="swatches" aria-label="Цвета кисти">
+                <button class="swatch active" style="--swatch: #6f8f53" data-color="#6f8f53" type="button" title="Трава"></button>
+                <button class="swatch" style="--swatch: #9c7a48" data-color="#9c7a48" type="button" title="Земля"></button>
+                <button class="swatch" style="--swatch: #496f83" data-color="#496f83" type="button" title="Вода"></button>
+                <button class="swatch" style="--swatch: #8b8d89" data-color="#8b8d89" type="button" title="Камень"></button>
+                <button class="swatch" style="--swatch: #b65345" data-color="#b65345" type="button" title="Опасность"></button>
+                <button class="swatch" style="--swatch: #c6a64d" data-color="#c6a64d" type="button" title="Свет"></button>
+              </div>
+              <div class="brush-preview" id="brushPreview"></div>
+            </div>
           </section>
 
           <section class="panel dice-panel">
@@ -247,6 +250,20 @@
             <ol class="roll-log" id="rollLog" aria-live="polite"></ol>
           </section>
         </aside>
+
+        <section class="battle-area" aria-label="Поле битвы">
+          <div class="battle-header">
+            <div>
+              <h2 id="sceneTitle">Засада у старой дороги</h2>
+              <p id="sceneMeta">24 x 16 клеток</p>
+            </div>
+            <div class="mode-chip" id="modeChip">Кисть</div>
+          </div>
+          <div class="canvas-shell" id="canvasShell">
+            <canvas id="battleCanvas" aria-label="Карта боя"></canvas>
+          </div>
+        </section>
+
       </main>
 
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
