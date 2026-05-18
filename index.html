@@ -18,7 +18,7 @@
         </div>
 
         <div class="top-actions" aria-label="Действия сцены">
-          <button class="ghost-button" id="topDrawerToggle" type="button">Свернуть верх</button>
+          <button class="collapse-button" id="topDrawerToggle" type="button" title="Свернуть верх" aria-label="Свернуть верх">⌃</button>
           <button class="ghost-button" id="exportSceneBtn" type="button">Экспорт</button>
           <label class="ghost-button file-button">
             Импорт
@@ -29,7 +29,14 @@
       </header>
 
       <section class="top-drawer" id="topDrawer" aria-label="Настройки кампании">
-        <div class="drawer-grid">
+        <div class="drawer-tabs" role="tablist" aria-label="Разделы верхнего меню">
+          <button class="drawer-tab active" data-drawer-tab="room" type="button">Комната</button>
+          <button class="drawer-tab" data-drawer-tab="library" type="button">Библиотеки</button>
+          <button class="drawer-tab" data-drawer-tab="sound" type="button">Звук</button>
+        </div>
+
+        <div class="drawer-page active" data-drawer-page="room">
+        <div class="drawer-grid room-grid">
           <section class="panel online-panel">
             <div class="panel-heading">
               <h2>Онлайн</h2>
@@ -54,7 +61,7 @@
               <h2>Карта</h2>
               <button class="mini-button" id="newMapBtn" type="button">Создать</button>
             </div>
-            <div class="field-grid two">
+            <div class="field-grid four">
               <label>
                 <span>Колонки</span>
                 <input id="colsInput" type="number" min="8" max="160" value="24" />
@@ -104,7 +111,11 @@
               <button id="clearTokensBtn" type="button">Убрать фигуры</button>
             </div>
           </section>
+        </div>
+        </div>
 
+        <div class="drawer-page" data-drawer-page="library">
+        <div class="drawer-grid library-grid">
           <section class="panel">
             <div class="panel-heading">
               <h2>Библиотека фигурок</h2>
@@ -146,10 +157,14 @@
             </div>
             <div class="asset-list" id="handoutAssets"></div>
           </section>
+        </div>
+        </div>
 
+        <div class="drawer-page" data-drawer-page="sound">
+        <div class="drawer-grid sound-grid">
           <section class="panel music-panel-wide">
             <h2>Музыка</h2>
-            <div class="field-grid">
+            <div class="field-grid two">
               <label>
                 <span>Ссылка MP3/OGG</span>
                 <input id="musicUrlInput" type="url" placeholder="https://..." />
@@ -169,6 +184,11 @@
             <audio id="audioPlayer" controls loop></audio>
             <div class="music-list" id="musicList"></div>
           </section>
+          <section class="panel">
+            <h2>Звук сцены</h2>
+            <p class="online-hint">Здесь позже будут пресеты музыки, атмосферные эффекты и быстрые звуки.</p>
+          </section>
+        </div>
         </div>
       </section>
 
@@ -203,10 +223,6 @@
               <label>
                 <span>Цвет</span>
                 <input id="brushColorInput" type="color" value="#6f8f53" />
-              </label>
-              <label>
-                <span>Свет / тень: <strong id="brushLightValue">100%</strong></span>
-                <input id="brushLightInput" type="range" min="40" max="160" value="100" />
               </label>
               <label>
                 <span>Прозрачность: <strong id="brushOpacityValue">100%</strong></span>

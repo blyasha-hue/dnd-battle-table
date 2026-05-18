@@ -160,7 +160,8 @@ h1 {
 }
 
 .ghost-button,
-.file-button {
+.file-button,
+.collapse-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -173,6 +174,13 @@ h1 {
   cursor: pointer;
 }
 
+.collapse-button {
+  width: 38px;
+  padding: 0;
+  font-size: 18px;
+  font-weight: 800;
+}
+
 .danger-button {
   border-color: rgba(193, 102, 85, 0.75);
   background: rgba(193, 102, 85, 0.14);
@@ -181,20 +189,56 @@ h1 {
 .top-drawer {
   border-bottom: 1px solid var(--line);
   background: rgba(18, 17, 15, 0.94);
-  padding: 12px;
+  padding: 10px 12px 12px;
 }
 
 .app.drawer-collapsed .top-drawer {
   display: none;
 }
 
+.drawer-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  overflow-x: auto;
+}
+
+.drawer-tab {
+  min-height: 34px;
+  padding: 0 14px;
+  white-space: nowrap;
+}
+
+.drawer-tab.active {
+  border-color: var(--accent);
+  background: rgba(209, 168, 80, 0.16);
+  color: var(--accent);
+}
+
+.drawer-page {
+  display: none;
+}
+
+.drawer-page.active {
+  display: block;
+}
+
 .drawer-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 12px;
-  max-height: 330px;
+  max-height: 260px;
   overflow: auto;
   padding-right: 4px;
+}
+
+.room-grid {
+  grid-template-columns: minmax(230px, 0.8fr) minmax(420px, 1.4fr) minmax(320px, 1fr);
+}
+
+.library-grid,
+.sound-grid {
+  grid-template-columns: repeat(2, minmax(320px, 1fr));
 }
 
 .music-panel-wide {
@@ -295,6 +339,10 @@ h1 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.field-grid.four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .checkbox-row {
   display: flex;
   align-items: center;
@@ -312,6 +360,11 @@ h1 {
   margin: 0;
   color: var(--ink);
   font-size: 14px;
+}
+
+.inline-check {
+  margin-top: 0;
+  min-height: 36px;
 }
 
 .mini-button,
@@ -688,6 +741,12 @@ audio {
     grid-template-columns: 260px minmax(0, 1fr);
   }
 
+  .room-grid,
+  .library-grid,
+  .sound-grid {
+    grid-template-columns: 1fr;
+  }
+
   .music-panel-wide {
     grid-column: auto;
   }
@@ -717,6 +776,7 @@ audio {
   }
 
   .field-grid.two,
+  .field-grid.four,
   .tool-grid {
     grid-template-columns: 1fr;
   }

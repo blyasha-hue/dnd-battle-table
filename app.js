@@ -36,8 +36,6 @@ const els = {
   mapBackgroundInput: document.querySelector("#mapBackgroundInput"),
   clearBackgroundBtn: document.querySelector("#clearBackgroundBtn"),
   brushColorInput: document.querySelector("#brushColorInput"),
-  brushLightInput: document.querySelector("#brushLightInput"),
-  brushLightValue: document.querySelector("#brushLightValue"),
   brushOpacityInput: document.querySelector("#brushOpacityInput"),
   brushOpacityValue: document.querySelector("#brushOpacityValue"),
   brushSizeInput: document.querySelector("#brushSizeInput"),
@@ -536,8 +534,6 @@ function syncInputs() {
   els.zoomInput.value = state.zoom;
   els.gridToggle.checked = state.showGrid;
   els.brushColorInput.value = state.brushColor;
-  els.brushLightInput.value = state.brushLight;
-  els.brushLightValue.textContent = `${state.brushLight}%`;
   els.brushOpacityInput.value = state.brushOpacity;
   els.brushOpacityValue.textContent = `${state.brushOpacity}%`;
   els.brushSizeInput.value = state.brushSize;
@@ -566,8 +562,20 @@ function renderAll() {
 
 function setDrawerCollapsed(collapsed) {
   appRoot.classList.toggle("drawer-collapsed", collapsed);
-  els.topDrawerToggle.textContent = collapsed ? "Развернуть верх" : "Свернуть верх";
+  els.topDrawerToggle.textContent = collapsed ? "⌄" : "⌃";
+  els.topDrawerToggle.title = collapsed ? "Развернуть верх" : "Свернуть верх";
+  els.topDrawerToggle.setAttribute("aria-label", collapsed ? "Развернуть верх" : "Свернуть верх");
   safeStorageSet(localStorage, "dnd-battle-table-drawer-collapsed", collapsed ? "1" : "0");
+}
+
+function activateDrawerTab(tabName) {
+  document.querySelectorAll(".drawer-tab").forEach((button) => {
+    button.classList.toggle("active", button.dataset.drawerTab === tabName);
+  });
+  document.querySelectorAll(".drawer-page").forEach((page) => {
+    page.classList.toggle("active", page.dataset.drawerPage === tabName);
+  });
+  safeStorageSet(localStorage, "dnd-battle-table-drawer-tab", tabName);
 }
 
 function renderCanvas() {
@@ -1328,12 +1336,6 @@ els.brushColorInput.addEventListener("input", (event) => {
   saveState();
 });
 
-els.brushLightInput.addEventListener("input", (event) => {
-  state.brushLight = Number(event.target.value);
-  syncInputs();
-  saveState();
-});
-
 els.brushOpacityInput.addEventListener("input", (event) => {
   state.brushOpacity = Number(event.target.value);
   syncInputs();
@@ -1348,6 +1350,12 @@ els.brushSizeInput.addEventListener("input", (event) => {
 
 els.topDrawerToggle.addEventListener("click", () => {
   setDrawerCollapsed(!appRoot.classList.contains("drawer-collapsed"));
+});
+
+document.querySelectorAll(".drawer-tab").forEach((button) => {
+  button.addEventListener("click", () => {
+    activateDrawerTab(button.dataset.drawerTab);
+  });
 });
 
 els.sceneNameInput.addEventListener("input", (event) => {
@@ -1533,5 +1541,6 @@ window.addEventListener("beforeunload", () => {
 });
 
 setDrawerCollapsed(safeStorageGet(localStorage, "dnd-battle-table-drawer-collapsed") === "1");
+activateDrawerTab(safeStorageGet(localStorage, "dnd-battle-table-drawer-tab") || "room");
 renderAll();
 connectOnline();
