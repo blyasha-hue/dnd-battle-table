@@ -73,8 +73,15 @@
             </div>
             <label class="checkbox-row">
               <input id="gridToggle" type="checkbox" checked />
-              <span>Сетка</span>
+              <span>Видимая сетка</span>
             </label>
+            <div class="button-row map-file-row">
+              <label class="ghost-button file-button">
+                Фон карты
+                <input id="mapBackgroundInput" type="file" accept="image/*" />
+              </label>
+              <button id="clearBackgroundBtn" type="button">Убрать фон</button>
+            </div>
           </section>
 
           <section class="panel">
@@ -119,14 +126,20 @@
           </section>
 
           <section class="panel">
-            <h2>Сцена</h2>
+            <div class="panel-heading">
+              <h2>Сцены</h2>
+              <button class="mini-button" id="newSceneBtn" type="button">+</button>
+            </div>
             <div class="field-grid">
               <label>
                 <span>Название</span>
                 <input id="sceneNameInput" type="text" value="Засада у старой дороги" maxlength="40" />
               </label>
             </div>
+            <div class="scene-list" id="sceneList"></div>
             <div class="button-row">
+              <button id="duplicateSceneBtn" type="button">Дубль</button>
+              <button id="deleteSceneBtn" type="button">Удалить</button>
               <button id="clearPaintBtn" type="button">Очистить краску</button>
               <button id="clearTokensBtn" type="button">Убрать фигуры</button>
             </div>
@@ -149,7 +162,7 @@
         <aside class="sidebar right-tools" aria-label="Панели партии">
           <section class="panel">
             <div class="panel-heading">
-              <h2>Фигурки</h2>
+              <h2>Библиотека фигурок</h2>
               <label class="icon-file-button" title="Добавить изображение фигурки">
                 +
                 <input id="tokenImageInput" type="file" accept="image/*" multiple />
@@ -170,7 +183,7 @@
 
           <section class="panel">
             <div class="panel-heading">
-              <h2>Картинки</h2>
+              <h2>Библиотека картинок</h2>
               <label class="icon-file-button" title="Добавить картинку">
                 +
                 <input id="handoutImageInput" type="file" accept="image/*" multiple />

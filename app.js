@@ -23,8 +23,14 @@ const els = {
   cellInput: document.querySelector("#cellInput"),
   zoomInput: document.querySelector("#zoomInput"),
   gridToggle: document.querySelector("#gridToggle"),
+  mapBackgroundInput: document.querySelector("#mapBackgroundInput"),
+  clearBackgroundBtn: document.querySelector("#clearBackgroundBtn"),
   brushColorInput: document.querySelector("#brushColorInput"),
   sceneNameInput: document.querySelector("#sceneNameInput"),
+  sceneList: document.querySelector("#sceneList"),
+  newSceneBtn: document.querySelector("#newSceneBtn"),
+  duplicateSceneBtn: document.querySelector("#duplicateSceneBtn"),
+  deleteSceneBtn: document.querySelector("#deleteSceneBtn"),
   tokenNameInput: document.querySelector("#tokenNameInput"),
   tokenSizeInput: document.querySelector("#tokenSizeInput"),
   tokenImageInput: document.querySelector("#tokenImageInput"),
@@ -57,6 +63,7 @@ const defaultState = {
   cell: 42,
   zoom: 100,
   showGrid: true,
+  background: null,
   activeTool: "paint",
   brushColor: "#6f8f53",
   terrain: {},
@@ -67,12 +74,15 @@ const defaultState = {
   selectedTokenAssetId: null,
   selectedHandoutAssetId: null,
   selectedObject: null,
+  activeSceneId: null,
+  scenes: [],
   musicTracks: [],
   currentTrackId: null,
   rollLog: [],
 };
 
 let state = loadState();
+normalizeScenes(state);
 let drag = null;
 let imageCache = new Map();
 let saveTimer = null;
@@ -139,6 +149,83 @@ function getRoomFromUrl() {
   return cleanRoomId(params.get("room") || safeStorageGet(localStorage, ROOM_KEY) || "main");
 }
 
+function sceneFromState(source, overrides = {}) {
+  return {
+    id: overrides.id || source.activeSceneId || uid("scene"),
+    name: overrides.name || source.sceneName || "Новая сцена",
+    cols: Number(source.cols) || 24,
+    rows: Number(source.rows) || 16,
+    cell: Number(source.cell) || 42,
+    showGrid: source.showGrid !== false,
+    background: source.background || null,
+    terrain: structuredClone(source.terrain || {}),
+    tokens: structuredClone(source.tokens || []),
+    handouts: structuredClone(source.handouts || []),
+  };
+}
+
+function blankScene(name = "Новая сцена") {
+  return {
+    id: uid("scene"),
+    name,
+    cols: 24,
+    rows: 16,
+    cell: 42,
+    showGrid: true,
+    background: null,
+    terrain: {},
+    tokens: [],
+    handouts: [],
+  };
+}
+
+function normalizeScenes(target) {
+  if (!Array.isArray(target.scenes) || !target.scenes.length) {
+    const sceneId = target.activeSceneId || uid("scene");
+    target.activeSceneId = sceneId;
+    target.scenes = [sceneFromState(target, { id: sceneId, name: target.sceneName || "Стартовая сцена" })];
+  }
+
+  target.scenes = target.scenes.map((scene, index) => ({
+    ...blankScene(index === 0 ? "Стартовая сцена" : `Сцена ${index + 1}`),
+    ...scene,
+    terrain: scene.terrain || {},
+    tokens: scene.tokens || [],
+    handouts: scene.handouts || [],
+    background: scene.background || null,
+  }));
+
+  if (!target.scenes.some((scene) => scene.id === target.activeSceneId)) {
+    target.activeSceneId = target.scenes[0].id;
+  }
+
+  applySceneToState(target, target.scenes.find((scene) => scene.id === target.activeSceneId));
+}
+
+function getActiveScene() {
+  return state.scenes.find((scene) => scene.id === state.activeSceneId);
+}
+
+function saveActiveScene() {
+  const scene = state.scenes?.find((item) => item.id === state.activeSceneId);
+  if (!scene) return;
+  Object.assign(scene, sceneFromState(state, { id: scene.id, name: state.sceneName || scene.name }));
+}
+
+function applySceneToState(target, scene) {
+  if (!scene) return;
+  target.sceneName = scene.name;
+  target.cols = scene.cols;
+  target.rows = scene.rows;
+  target.cell = scene.cell;
+  target.showGrid = scene.showGrid !== false;
+  target.background = scene.background || null;
+  target.terrain = structuredClone(scene.terrain || {});
+  target.tokens = structuredClone(scene.tokens || []);
+  target.handouts = structuredClone(scene.handouts || []);
+  target.selectedObject = null;
+}
+
 function loadState() {
   try {
     const raw = safeStorageGet(localStorage, STORAGE_KEY);
@@ -159,6 +246,7 @@ function serializeState(source) {
   return {
     ...source,
     selectedObject: source.selectedObject || null,
+    scenes: structuredClone(source.scenes || []),
     musicTracks: (source.musicTracks || []).filter((track) => !track.transient),
   };
 }
@@ -166,13 +254,16 @@ function serializeState(source) {
 function applyRemoteState(nextState, revision = sync.revision) {
   if (!nextState) return;
   sync.applyingRemote = true;
+  const localTool = state.activeTool;
+  const localSelection = state.selectedObject;
   state = {
     ...structuredClone(defaultState),
     ...nextState,
-    activeTool: state.activeTool || nextState.activeTool || "paint",
-    selectedObject: state.selectedObject,
+    activeTool: localTool || nextState.activeTool || "paint",
+    selectedObject: localSelection,
     musicTracks: (nextState.musicTracks || []).filter((track) => !track.transient),
   };
+  normalizeScenes(state);
   sync.revision = Math.max(sync.revision, Number(revision || 0));
   imageCache = new Map();
   renderAll();
@@ -183,6 +274,7 @@ function saveState() {
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
     try {
+      saveActiveScene();
       const serializable = serializeState(state);
       safeStorageSet(localStorage, STORAGE_KEY, JSON.stringify(serializable));
       els.autosaveStatus.textContent = sync.online ? "Автосохранено и синхронизируется" : "Автосохранено";
@@ -360,7 +452,7 @@ function resizeCanvas() {
 
 function syncInputs() {
   els.sceneTitle.textContent = state.sceneName;
-  els.sceneMeta.textContent = `${state.cols} x ${state.rows} клеток`;
+  els.sceneMeta.textContent = `${state.cols} x ${state.rows} клеток${state.background ? " · фон карты" : ""}`;
   els.modeChip.textContent = toolNames[state.activeTool];
   els.colsInput.value = state.cols;
   els.rowsInput.value = state.rows;
@@ -379,8 +471,10 @@ function syncInputs() {
 }
 
 function renderAll() {
+  saveActiveScene();
   syncInputs();
   resizeCanvas();
+  renderScenes();
   renderAssets();
   renderMusic();
   renderRollLog();
@@ -403,9 +497,17 @@ function renderCanvas() {
 function drawBase(width, height) {
   ctx.fillStyle = "#272216";
   ctx.fillRect(0, 0, width, height);
-  ctx.fillStyle = "rgba(255, 255, 255, 0.025)";
-  for (let y = 0; y < height; y += state.cell * 2) {
-    ctx.fillRect(0, y, width, state.cell);
+
+  const background = state.background?.src ? getImage(state.background.src) : null;
+  if (background?.complete && background.naturalWidth) {
+    drawCoverImage(background, 0, 0, width, height);
+    ctx.fillStyle = "rgba(0, 0, 0, 0.12)";
+    ctx.fillRect(0, 0, width, height);
+  } else {
+    ctx.fillStyle = "rgba(255, 255, 255, 0.025)";
+    for (let y = 0; y < height; y += state.cell * 2) {
+      ctx.fillRect(0, y, width, state.cell);
+    }
   }
 }
 
@@ -739,6 +841,50 @@ canvas.addEventListener("pointercancel", () => {
   drag = null;
 });
 
+function renderScenes() {
+  els.sceneList.innerHTML = "";
+  state.scenes.forEach((scene) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = `scene-item ${scene.id === state.activeSceneId ? "selected" : ""}`;
+    item.innerHTML = `
+      <div>
+        <div class="asset-title">${escapeHtml(scene.name)}</div>
+        <div class="asset-meta">${scene.cols} x ${scene.rows}${scene.background ? " · фон" : ""}</div>
+      </div>
+    `;
+    item.addEventListener("click", () => {
+      if (scene.id === state.activeSceneId) return;
+      switchScene(scene.id);
+    });
+    els.sceneList.appendChild(item);
+  });
+}
+
+function switchScene(sceneId) {
+  const nextScene = state.scenes.find((scene) => scene.id === sceneId);
+  if (!nextScene) return;
+  saveActiveScene();
+  state.activeSceneId = nextScene.id;
+  applySceneToState(state, nextScene);
+  imageCache = new Map();
+  renderAll();
+  showToast("Сцена переключена.");
+}
+
+function createSceneFromCurrent(copyContent = false) {
+  saveActiveScene();
+  const baseName = copyContent ? `${state.sceneName} копия` : `Сцена ${state.scenes.length + 1}`;
+  const scene = copyContent
+    ? sceneFromState(state, { id: uid("scene"), name: baseName })
+    : blankScene(baseName);
+  state.scenes.push(scene);
+  state.activeSceneId = scene.id;
+  applySceneToState(state, scene);
+  imageCache = new Map();
+  renderAll();
+}
+
 function renderAssets() {
   renderAssetList({
     container: els.tokenAssets,
@@ -826,6 +972,30 @@ els.tokenImageInput.addEventListener("change", (event) => {
 els.handoutImageInput.addEventListener("change", (event) => {
   addImageFiles(event.target.files, "handout");
   event.target.value = "";
+});
+
+els.mapBackgroundInput.addEventListener("change", (event) => {
+  const [file] = event.target.files;
+  if (!file || !file.type.startsWith("image/")) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    state.background = {
+      id: uid("background"),
+      name: file.name,
+      src: reader.result,
+    };
+    imageCache = new Map();
+    renderAll();
+    showToast("Фон карты добавлен.");
+  };
+  reader.readAsDataURL(file);
+  event.target.value = "";
+});
+
+els.clearBackgroundBtn.addEventListener("click", () => {
+  state.background = null;
+  imageCache = new Map();
+  renderAll();
 });
 
 function renderMusic() {
@@ -1042,8 +1212,37 @@ els.brushColorInput.addEventListener("input", (event) => {
 
 els.sceneNameInput.addEventListener("input", (event) => {
   state.sceneName = event.target.value || "Без названия";
+  const scene = getActiveScene();
+  if (scene) scene.name = state.sceneName;
   syncInputs();
+  renderScenes();
   saveState();
+});
+
+els.newSceneBtn.addEventListener("click", () => {
+  createSceneFromCurrent(false);
+  showToast("Создана новая пустая сцена.");
+});
+
+els.duplicateSceneBtn.addEventListener("click", () => {
+  createSceneFromCurrent(true);
+  showToast("Сцена продублирована.");
+});
+
+els.deleteSceneBtn.addEventListener("click", () => {
+  if (state.scenes.length <= 1) {
+    showToast("Нужна хотя бы одна сцена.");
+    return;
+  }
+  const currentId = state.activeSceneId;
+  const currentIndex = state.scenes.findIndex((scene) => scene.id === currentId);
+  state.scenes = state.scenes.filter((scene) => scene.id !== currentId);
+  const nextScene = state.scenes[Math.max(0, currentIndex - 1)] || state.scenes[0];
+  state.activeSceneId = nextScene.id;
+  applySceneToState(state, nextScene);
+  imageCache = new Map();
+  renderAll();
+  showToast("Сцена удалена.");
 });
 
 els.gridToggle.addEventListener("change", (event) => {
@@ -1107,12 +1306,14 @@ document.querySelector("#resetSceneBtn").addEventListener("click", () => {
   transientUrls.clear();
   localStorage.removeItem(STORAGE_KEY);
   state = structuredClone(defaultState);
+  normalizeScenes(state);
   imageCache = new Map();
   els.audioPlayer.removeAttribute("src");
   renderAll();
 });
 
 document.querySelector("#exportSceneBtn").addEventListener("click", () => {
+  saveActiveScene();
   const payload = JSON.stringify(
     {
       ...state,
@@ -1125,7 +1326,7 @@ document.querySelector("#exportSceneBtn").addEventListener("click", () => {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `${state.sceneName.replace(/[^\p{L}\p{N}]+/gu, "-") || "dnd-scene"}.json`;
+  link.download = `${state.sceneName.replace(/[^\p{L}\p{N}]+/gu, "-") || "dnd-campaign"}.json`;
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -1144,6 +1345,7 @@ document.querySelector("#importSceneInput").addEventListener("change", (event) =
         ...imported,
         musicTracks: (imported.musicTracks || []).filter((track) => !track.transient),
       };
+      normalizeScenes(state);
       imageCache = new Map();
       renderAll();
       showToast("Сцена импортирована.");
