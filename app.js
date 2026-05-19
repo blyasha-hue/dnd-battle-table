@@ -1155,16 +1155,16 @@ function screenPx(value) {
 }
 
 function drawBase(width, height) {
-  ctx.fillStyle = "#272216";
+  ctx.fillStyle = "#2d2416";
   ctx.fillRect(0, 0, width, height);
 
   const background = state.background?.src && !state.backgroundHidden ? getImage(state.background.src) : null;
   if (background?.complete && background.naturalWidth) {
     ctx.drawImage(background, 0, 0, width, height);
-    ctx.fillStyle = "rgba(0, 0, 0, 0.12)";
+    ctx.fillStyle = "rgba(0, 0, 0, 0.035)";
     ctx.fillRect(0, 0, width, height);
   } else {
-    ctx.fillStyle = "rgba(255, 255, 255, 0.025)";
+    ctx.fillStyle = "rgba(255, 232, 176, 0.035)";
     for (let y = 0; y < height; y += state.cell * 2) {
       ctx.fillRect(0, y, width, state.cell);
     }
@@ -1206,7 +1206,7 @@ function drawFog(width, height) {
 function drawGrid(width, height) {
   if (!state.showGrid) return;
   ctx.save();
-  ctx.strokeStyle = "rgba(246, 234, 211, 0.22)";
+  ctx.strokeStyle = "rgba(255, 246, 215, 0.18)";
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let x = 0; x <= width; x += state.cell) {
@@ -1238,6 +1238,17 @@ function drawTokens() {
     const visualY = centerY - visualSize / 2;
     const padding = clamp(visualSize * 0.12, 2, 5);
     const radius = Math.max(5, visualSize / 2 - padding);
+    const ringRadius = radius + screenPx(4);
+
+    ctx.save();
+    ctx.shadowColor = "rgba(0, 0, 0, 0.72)";
+    ctx.shadowBlur = screenPx(10);
+    ctx.shadowOffsetY = screenPx(3);
+    ctx.fillStyle = "rgba(8, 6, 4, 0.72)";
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, ringRadius + screenPx(2), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
 
     ctx.save();
     ctx.beginPath();
@@ -1253,16 +1264,19 @@ function drawTokens() {
     ctx.restore();
 
     ctx.save();
-    ctx.lineWidth = isFocusTurn ? 5 : isCurrentTurn ? 4 : 3;
-    ctx.shadowColor = isFocusTurn ? "rgba(255, 218, 112, 0.95)" : isCurrentTurn ? "rgba(209, 168, 80, 0.75)" : "transparent";
-    ctx.shadowBlur = isFocusTurn ? 26 : isCurrentTurn ? 18 : 0;
-    ctx.strokeStyle = isCurrentTurn || state.selectedObject?.id === token.id ? "#d1a850" : "#11100f";
+    ctx.lineWidth = isFocusTurn ? screenPx(6) : isCurrentTurn ? screenPx(5) : screenPx(3.5);
+    ctx.shadowColor = isFocusTurn ? "rgba(255, 218, 112, 0.98)" : isCurrentTurn ? "rgba(227, 182, 92, 0.82)" : "rgba(0, 0, 0, 0.38)";
+    ctx.shadowBlur = isFocusTurn ? screenPx(28) : isCurrentTurn ? screenPx(18) : screenPx(7);
+    ctx.strokeStyle = isCurrentTurn || state.selectedObject?.id === token.id ? "#ffd36d" : "#c9c1ab";
     ctx.beginPath();
-    ctx.arc(centerX, centerY, radius + (isFocusTurn ? 3 : isCurrentTurn ? 2 : 0), 0, Math.PI * 2);
+    ctx.arc(centerX, centerY, ringRadius + (isFocusTurn ? screenPx(3) : isCurrentTurn ? screenPx(2) : 0), 0, Math.PI * 2);
     ctx.stroke();
     ctx.shadowBlur = 0;
-    ctx.lineWidth = isFocusTurn ? 3 : isCurrentTurn ? 2 : 1;
-    ctx.strokeStyle = isCurrentTurn ? "rgba(255, 248, 214, 0.96)" : "rgba(243, 234, 215, 0.85)";
+    ctx.lineWidth = screenPx(1.5);
+    ctx.strokeStyle = "rgba(20, 12, 7, 0.92)";
+    ctx.stroke();
+    ctx.lineWidth = screenPx(1);
+    ctx.strokeStyle = isCurrentTurn ? "rgba(255, 248, 214, 0.98)" : "rgba(255, 240, 200, 0.78)";
     ctx.stroke();
     ctx.restore();
 
@@ -1278,11 +1292,14 @@ function drawTokens() {
       const metrics = ctx.measureText(label);
       const labelWidth = Math.min(footprint + screenPx(44), metrics.width + screenPx(14));
       const labelX = px + footprint / 2 - labelWidth / 2;
-      const labelY = py + footprint + screenPx(4);
-      ctx.fillStyle = "rgba(17, 16, 15, 0.82)";
+      const labelY = py + footprint + screenPx(6);
+      ctx.fillStyle = "rgba(18, 10, 6, 0.92)";
       roundRect(labelX, labelY, labelWidth, labelHeight, screenPx(5));
       ctx.fill();
-      ctx.fillStyle = "#f3ead7";
+      ctx.lineWidth = screenPx(1);
+      ctx.strokeStyle = "rgba(227, 182, 92, 0.56)";
+      ctx.stroke();
+      ctx.fillStyle = "#fff0cf";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(label, px + footprint / 2, labelY + labelHeight / 2, labelWidth - screenPx(8));
@@ -1343,13 +1360,13 @@ function drawTokenBadge(label, x, y, color, align = "center") {
   const height = screenPx(18);
   const width = ctx.measureText(label).width + padX * 2;
   const left = align === "left" ? x : align === "right" ? x - width : x - width / 2;
-  ctx.fillStyle = "rgba(17, 16, 15, 0.9)";
+  ctx.fillStyle = "rgba(18, 10, 6, 0.94)";
   roundRect(left, y, width, height, screenPx(5));
   ctx.fill();
   ctx.lineWidth = screenPx(1.2);
   ctx.strokeStyle = color;
   ctx.stroke();
-  ctx.fillStyle = "#f3ead7";
+  ctx.fillStyle = "#fff0cf";
   ctx.textAlign = "center";
   ctx.fillText(label, left + width / 2, y + height / 2);
 }
@@ -2815,12 +2832,22 @@ els.createSaveSlotBtn.addEventListener("click", () => {
 });
 
 els.joinRoomBtn.addEventListener("click", () => {
+  saveProfile();
   const nextRoom = cleanRoomId(els.roomInput.value);
   if (!sync.online) {
-    showToast("Для общей комнаты запусти сайт через server.js.");
+    applyRoleUi();
+    renderPlayers();
+    showToast("Профиль сохранён в этом браузере.");
     return;
   }
-  location.href = roomUrl(nextRoom);
+  if (nextRoom !== sync.roomId) {
+    location.href = roomUrl(nextRoom);
+    return;
+  }
+  sendPresence();
+  applyRoleUi();
+  renderPlayers();
+  showToast("Профиль применён.");
 });
 
 els.roomInput.addEventListener("keydown", (event) => {
