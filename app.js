@@ -356,6 +356,11 @@ function initiativeSide(value) {
   return initiativeSides.includes(nextValue) ? nextValue : "gray";
 }
 
+function nextInitiativeSide(value) {
+  const currentIndex = initiativeSides.indexOf(initiativeSide(value));
+  return initiativeSides[(currentIndex + 1) % initiativeSides.length];
+}
+
 function normalizeInitiative(target = state) {
   const tokens = Array.isArray(target.tokens) ? target.tokens : [];
   const tokenById = new Map(tokens.map((token) => [token.id, token]));
@@ -1009,6 +1014,23 @@ function cellCenter(cellX, cellY) {
   };
 }
 
+function cellEdgeToward(cellX, cellY, targetCellX, targetCellY) {
+  const center = cellCenter(cellX, cellY);
+  const target = cellCenter(targetCellX, targetCellY);
+  const dx = target.x - center.x;
+  const dy = target.y - center.y;
+  if (!dx && !dy) return center;
+
+  const distance = Math.hypot(dx, dy);
+  const unitX = dx / distance;
+  const unitY = dy / distance;
+  const edgeDistance = (state.cell / 2) / Math.max(Math.abs(unitX), Math.abs(unitY), 0.001);
+  return {
+    x: center.x + unitX * edgeDistance,
+    y: center.y + unitY * edgeDistance,
+  };
+}
+
 function gridIntersection(point) {
   return {
     x: clamp(Math.round(point.x / state.cell), 0, state.cols),
@@ -1034,10 +1056,22 @@ function angleDifference(a, b) {
 
 function templateGeometry(template) {
   const sizeCells = Math.max(1, Number(template.sizeFt || 20) / 5);
-  const start = templatePoint(template);
+  let start = templatePoint(template);
   const end = templatePoint(template, "endX", "endY");
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
+  if ((template.shape === "line" || template.shape === "cone") && template.center !== "corner") {
+    start = cellEdgeToward(
+      clamp(Number(template.x) || 0, 0, state.cols - 1),
+      clamp(Number(template.y) || 0, 0, state.rows - 1),
+      clamp(Number(template.endX ?? template.x) || 0, 0, state.cols - 1),
+      clamp(Number(template.endY ?? template.y) || 0, 0, state.rows - 1),
+    );
+  }
+  let dx = end.x - start.x;
+  let dy = end.y - start.y;
+  if (!dx && !dy && (template.shape === "line" || template.shape === "cone")) {
+    dx = 1;
+    dy = 0;
+  }
   const angle = Math.atan2(dy, dx || (dy ? 0 : 1));
   return {
     sizeCells,
@@ -1175,7 +1209,7 @@ function drawTemplates() {
       const width = state.cell;
       const x2 = start.x + Math.cos(angle) * length;
       const y2 = start.y + Math.sin(angle) * length;
-      ctx.lineCap = "round";
+      ctx.lineCap = "butt";
       ctx.lineWidth = width;
       ctx.strokeStyle = templateColor(template, 1);
       ctx.beginPath();
@@ -1240,8 +1274,8 @@ function drawTemplateLabel(label, x, y) {
 function drawMeasurement() {
   if (!state.measurement) return;
   const { startX, startY, endX, endY } = state.measurement;
-  const start = cellCenter(startX, startY);
-  const end = cellCenter(endX, endY);
+  const start = cellEdgeToward(startX, startY, endX, endY);
+  const end = cellEdgeToward(endX, endY, endX + (endX - startX), endY + (endY - startY));
   const distance = Math.round(Math.hypot(endX - startX, endY - startY) * 5);
 
   ctx.save();
@@ -1737,14 +1771,9 @@ function renderInitiative() {
     const asset = state.tokenAssets.find((item) => item.id === token?.assetId);
     const isActive = activeGroup.has(entry.tokenId);
     const isFocus = entry.id === state.activeInitiativeId;
-    const sideButtons = initiativeSides
-      .map(
-        (side) =>
-          `<button class="initiative-side-button team-${side} ${entry.side === side ? "active" : ""}" type="button" data-side="${side}" aria-label="${initiativeSideLabels[side]}" title="${initiativeSideLabels[side]}"></button>`
-      )
-      .join("");
+    const side = initiativeSide(entry.side);
     const item = document.createElement("div");
-    item.className = `initiative-item ${isActive ? "active-turn" : ""} ${isFocus ? "active-focus" : ""} side-${entry.side}`;
+    item.className = `initiative-item ${isActive ? "active-turn" : ""} ${isFocus ? "active-focus" : ""} side-${side}`;
     item.innerHTML = `
       <div class="initiative-rank">${index + 1}</div>
       ${
@@ -1756,7 +1785,7 @@ function renderInitiative() {
         <button class="initiative-name" type="button">${escapeHtml(entry.name)}</button>
         <div class="initiative-controls">
           <input class="initiative-score" type="number" value="${Number(entry.value)}" aria-label="Инициатива">
-          <div class="initiative-side-picker" role="group" aria-label="Команда">${sideButtons}</div>
+          <button class="initiative-side-button team-${side}" type="button" aria-label="Команда: ${initiativeSideLabels[side]}. Нажми, чтобы сменить." title="${initiativeSideLabels[side]}"></button>
         </div>
       </div>
       <button class="icon-action initiative-remove" type="button" aria-label="Убрать из инициативы">×</button>
@@ -1776,14 +1805,10 @@ function renderInitiative() {
       renderAll();
     });
 
-    item.querySelectorAll(".initiative-side-button").forEach((button) => {
-      button.addEventListener("click", () => {
-        const nextSide = initiativeSide(button.dataset.side);
-        if (entry.side === nextSide) return;
-        captureUndo();
-        entry.side = nextSide;
-        renderAll();
-      });
+    item.querySelector(".initiative-side-button").addEventListener("click", () => {
+      captureUndo();
+      entry.side = nextInitiativeSide(entry.side);
+      renderAll();
     });
 
     item.querySelector(".initiative-remove").addEventListener("click", () => {
@@ -2398,16 +2423,16 @@ window.addEventListener("keydown", (event) => {
   const toolShortcutMap = {
     Digit1: "select",
     Numpad1: "select",
-    Digit2: "paint",
-    Numpad2: "paint",
-    Digit3: "erase",
-    Numpad3: "erase",
-    Digit4: "measure",
-    Numpad4: "measure",
-    Digit5: "template",
-    Numpad5: "template",
-    Digit6: "ping",
-    Numpad6: "ping",
+    Digit2: "ping",
+    Numpad2: "ping",
+    Digit3: "measure",
+    Numpad3: "measure",
+    Digit4: "template",
+    Numpad4: "template",
+    Digit5: "paint",
+    Numpad5: "paint",
+    Digit6: "erase",
+    Numpad6: "erase",
   };
   const keyMap = {
     v: "select",

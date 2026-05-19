@@ -839,8 +839,9 @@ audio {
 
 .initiative-controls {
   display: grid;
-  grid-template-columns: 42px minmax(112px, 1fr);
+  grid-template-columns: 42px 36px;
   gap: 6px;
+  align-items: center;
 }
 
 .initiative-score {
@@ -850,14 +851,9 @@ audio {
   text-align: center;
 }
 
-.initiative-side-picker {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 5px;
-}
-
 .initiative-side-button {
-  min-width: 0;
+  width: 34px;
+  min-width: 34px;
   min-height: 30px;
   padding: 0;
   border-color: rgba(243, 234, 215, 0.22);
@@ -866,7 +862,7 @@ audio {
   box-shadow: inset 0 -10px 18px rgba(0, 0, 0, 0.22);
 }
 
-.initiative-side-button.active {
+.initiative-side-button:hover {
   border-color: rgba(255, 246, 196, 0.92);
   box-shadow:
     0 0 0 1px rgba(255, 246, 196, 0.35),
