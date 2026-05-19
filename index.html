@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>D&D Battle Table</title>
-    <link rel="stylesheet" href="styles.css?v=2026-05-19-3" />
+    <link rel="stylesheet" href="styles.css?v=2026-05-19-4" />
   </head>
   <body>
     <div class="app" data-theme="ember">
@@ -289,6 +289,36 @@
             <div class="initiative-list" id="initiativeList"></div>
           </section>
 
+          <section class="panel token-details-panel">
+            <h2>Фигурка</h2>
+            <div id="tokenDetailsEmpty" class="initiative-empty">Выбери фигурку на карте.</div>
+            <div id="tokenDetailsForm" class="token-details-form" hidden>
+              <label>
+                <span>Имя</span>
+                <input id="selectedTokenNameInput" type="text" maxlength="28" />
+              </label>
+              <div class="field-grid three">
+                <label>
+                  <span>НП</span>
+                  <input id="selectedTokenHpInput" type="number" min="0" max="999" />
+                </label>
+                <label>
+                  <span>Макс</span>
+                  <input id="selectedTokenMaxHpInput" type="number" min="0" max="999" />
+                </label>
+                <label>
+                  <span>КД</span>
+                  <input id="selectedTokenAcInput" type="number" min="0" max="99" />
+                </label>
+              </div>
+              <div class="token-condition-grid" id="tokenConditionGrid" aria-label="Состояния фигурки"></div>
+              <label>
+                <span>Заметка</span>
+                <input id="selectedTokenNoteInput" type="text" maxlength="48" placeholder="Ярость, концентрация..." />
+              </label>
+            </div>
+          </section>
+
           <section class="panel dice-panel">
             <h2>Дайсы</h2>
             <div class="dice-grid" aria-label="Быстрые броски">
@@ -333,6 +363,6 @@
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
     </div>
 
-    <script src="app.js?v=2026-05-19-3"></script>
+    <script src="app.js?v=2026-05-19-4"></script>
   </body>
 </html>

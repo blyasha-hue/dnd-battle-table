@@ -65,6 +65,14 @@ const els = {
   collectInitiativeBtn: document.querySelector("#collectInitiativeBtn"),
   clearInitiativeBtn: document.querySelector("#clearInitiativeBtn"),
   initiativeList: document.querySelector("#initiativeList"),
+  tokenDetailsEmpty: document.querySelector("#tokenDetailsEmpty"),
+  tokenDetailsForm: document.querySelector("#tokenDetailsForm"),
+  selectedTokenNameInput: document.querySelector("#selectedTokenNameInput"),
+  selectedTokenHpInput: document.querySelector("#selectedTokenHpInput"),
+  selectedTokenMaxHpInput: document.querySelector("#selectedTokenMaxHpInput"),
+  selectedTokenAcInput: document.querySelector("#selectedTokenAcInput"),
+  selectedTokenNoteInput: document.querySelector("#selectedTokenNoteInput"),
+  tokenConditionGrid: document.querySelector("#tokenConditionGrid"),
   musicUrlInput: document.querySelector("#musicUrlInput"),
   musicNameInput: document.querySelector("#musicNameInput"),
   musicFileInput: document.querySelector("#musicFileInput"),
@@ -95,6 +103,16 @@ const initiativeSideLabels = {
   gray: "Серая команда",
   green: "Зеленая команда",
 };
+const tokenConditions = [
+  { id: "prone", label: "Сбит" },
+  { id: "stunned", label: "Оглуш" },
+  { id: "poisoned", label: "Яд" },
+  { id: "blinded", label: "Слеп" },
+  { id: "restrained", label: "Связан" },
+  { id: "invisible", label: "Невид" },
+  { id: "charmed", label: "Чары" },
+  { id: "unconscious", label: "0 НП" },
+];
 
 const defaultState = {
   sceneName: "Засада у старой дороги",
@@ -344,6 +362,15 @@ function tokenVisualSize(token) {
 function tokenDisplayName(token) {
   const asset = state.tokenAssets.find((item) => item.id === token.assetId);
   return token.name || asset?.name?.replace(/\.[^.]+$/, "") || "Фигурка";
+}
+
+function tokenConditionsList(token) {
+  return Array.isArray(token.conditions) ? token.conditions.filter((id) => tokenConditions.some((item) => item.id === id)) : [];
+}
+
+function selectedToken() {
+  if (state.selectedObject?.type !== "token") return null;
+  return state.tokens.find((token) => token.id === state.selectedObject.id) || null;
 }
 
 function initiativeSide(value) {
@@ -769,6 +796,7 @@ function renderAll() {
   renderScenes();
   renderAssets();
   renderInitiative();
+  renderTokenDetails();
   renderMusic();
   renderRollLog();
   saveState();
@@ -920,7 +948,54 @@ function drawTokens() {
       ctx.fillText(label, px + footprint / 2, labelY + 10, labelWidth - 8);
       ctx.restore();
     }
+
+    drawTokenCombatBadges(token, px, py, footprint);
   });
+}
+
+function drawTokenCombatBadges(token, px, py, footprint) {
+  const hp = Number.isFinite(Number(token.hp)) ? Number(token.hp) : null;
+  const maxHp = Number.isFinite(Number(token.maxHp)) ? Number(token.maxHp) : null;
+  const ac = Number.isFinite(Number(token.ac)) ? Number(token.ac) : null;
+  const conditions = tokenConditionsList(token);
+  const note = String(token.note || "").trim();
+
+  ctx.save();
+  ctx.font = `800 ${screenPx(11)}px Inter, system-ui, sans-serif`;
+  ctx.textBaseline = "middle";
+
+  if (hp !== null || maxHp !== null) {
+    const label = `${hp ?? "?"}${maxHp !== null ? `/${maxHp}` : ""}`;
+    drawTokenBadge(label, px - screenPx(3), py - screenPx(8), "#7fa462", "left");
+  }
+
+  if (ac !== null) {
+    drawTokenBadge(`КД ${ac}`, px + footprint + screenPx(3), py - screenPx(8), "#4f8793", "right");
+  }
+
+  const tags = conditions.slice(0, 3).map((id) => tokenConditions.find((item) => item.id === id)?.label).filter(Boolean);
+  if (note) tags.push(note.slice(0, 10));
+  if (tags.length) {
+    drawTokenBadge(tags.slice(0, 3).join(" · "), px + footprint / 2, py - screenPx(26), "#d1a850", "center");
+  }
+
+  ctx.restore();
+}
+
+function drawTokenBadge(label, x, y, color, align = "center") {
+  const padX = screenPx(6);
+  const height = screenPx(18);
+  const width = ctx.measureText(label).width + padX * 2;
+  const left = align === "left" ? x : align === "right" ? x - width : x - width / 2;
+  ctx.fillStyle = "rgba(17, 16, 15, 0.9)";
+  roundRect(left, y, width, height, screenPx(5));
+  ctx.fill();
+  ctx.lineWidth = screenPx(1.2);
+  ctx.strokeStyle = color;
+  ctx.stroke();
+  ctx.fillStyle = "#f3ead7";
+  ctx.textAlign = "center";
+  ctx.fillText(label, left + width / 2, y + height / 2);
 }
 
 function drawHandouts() {
@@ -1405,6 +1480,7 @@ function objectAt(point) {
 function selectObject(type, object) {
   state.selectedObject = { type, id: object.id };
   renderCanvas();
+  renderTokenDetails();
   saveState();
 }
 
@@ -1824,6 +1900,51 @@ function renderInitiative() {
   });
 }
 
+function renderTokenDetails() {
+  const token = selectedToken();
+  els.tokenDetailsEmpty.hidden = Boolean(token);
+  els.tokenDetailsForm.hidden = !token;
+  if (!token) return;
+
+  els.selectedTokenNameInput.value = token.name || tokenDisplayName(token);
+  els.selectedTokenHpInput.value = Number.isFinite(Number(token.hp)) ? Number(token.hp) : "";
+  els.selectedTokenMaxHpInput.value = Number.isFinite(Number(token.maxHp)) ? Number(token.maxHp) : "";
+  els.selectedTokenAcInput.value = Number.isFinite(Number(token.ac)) ? Number(token.ac) : "";
+  els.selectedTokenNoteInput.value = token.note || "";
+
+  const activeConditions = new Set(tokenConditionsList(token));
+  els.tokenConditionGrid.innerHTML = "";
+  tokenConditions.forEach((condition) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `condition-chip ${activeConditions.has(condition.id) ? "active" : ""}`;
+    button.textContent = condition.label;
+    button.addEventListener("click", () => {
+      captureUndo();
+      const next = new Set(tokenConditionsList(token));
+      if (next.has(condition.id)) {
+        next.delete(condition.id);
+      } else {
+        next.add(condition.id);
+      }
+      token.conditions = [...next];
+      renderAll();
+    });
+    els.tokenConditionGrid.appendChild(button);
+  });
+}
+
+function updateSelectedToken(mutator) {
+  const token = selectedToken();
+  if (!token) return;
+  captureUndo();
+  mutator(token);
+  const initiativeEntry = state.initiative.find((entry) => entry.tokenId === token.id);
+  if (initiativeEntry) initiativeEntry.name = tokenDisplayName(token);
+  normalizeInitiative(state);
+  renderAll();
+}
+
 function collectInitiativeFromMap() {
   if (!state.tokens.length) {
     showToast("Сначала поставь фигурки на карту.");
@@ -1904,6 +2025,56 @@ els.tokenImageInput.addEventListener("change", (event) => {
 els.handoutImageInput.addEventListener("change", (event) => {
   addImageFiles(event.target.files, "handout");
   event.target.value = "";
+});
+
+els.selectedTokenNameInput.addEventListener("change", (event) => {
+  updateSelectedToken((token) => {
+    const value = event.target.value.trim();
+    if (value) {
+      token.name = value;
+    } else {
+      delete token.name;
+    }
+  });
+});
+
+els.selectedTokenHpInput.addEventListener("change", (event) => {
+  updateSelectedToken((token) => {
+    const value = event.target.value === "" ? null : clamp(Number(event.target.value) || 0, 0, 999);
+    if (value === null) {
+      delete token.hp;
+    } else {
+      token.hp = value;
+    }
+  });
+});
+
+els.selectedTokenMaxHpInput.addEventListener("change", (event) => {
+  updateSelectedToken((token) => {
+    const value = event.target.value === "" ? null : clamp(Number(event.target.value) || 0, 0, 999);
+    if (value === null) {
+      delete token.maxHp;
+    } else {
+      token.maxHp = value;
+    }
+  });
+});
+
+els.selectedTokenAcInput.addEventListener("change", (event) => {
+  updateSelectedToken((token) => {
+    const value = event.target.value === "" ? null : clamp(Number(event.target.value) || 0, 0, 99);
+    if (value === null) {
+      delete token.ac;
+    } else {
+      token.ac = value;
+    }
+  });
+});
+
+els.selectedTokenNoteInput.addEventListener("change", (event) => {
+  updateSelectedToken((token) => {
+    token.note = event.target.value.trim();
+  });
 });
 
 els.mapBackgroundInput.addEventListener("change", (event) => {
