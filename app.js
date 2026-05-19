@@ -70,7 +70,6 @@ const els = {
   selectedTokenNameInput: document.querySelector("#selectedTokenNameInput"),
   selectedTokenHpInput: document.querySelector("#selectedTokenHpInput"),
   selectedTokenMaxHpInput: document.querySelector("#selectedTokenMaxHpInput"),
-  selectedTokenAcInput: document.querySelector("#selectedTokenAcInput"),
   selectedTokenNoteInput: document.querySelector("#selectedTokenNoteInput"),
   tokenConditionGrid: document.querySelector("#tokenConditionGrid"),
   musicUrlInput: document.querySelector("#musicUrlInput"),
@@ -104,14 +103,21 @@ const initiativeSideLabels = {
   green: "Зеленая команда",
 };
 const tokenConditions = [
+  { id: "unconscious", label: "Бессозн." },
+  { id: "frightened", label: "Испуг." },
+  { id: "exhaustion", label: "Истощ." },
+  { id: "invisible", label: "Невид." },
+  { id: "incapacitated", label: "Недеесп." },
+  { id: "deafened", label: "Оглох." },
+  { id: "petrified", label: "Окамен." },
+  { id: "restrained", label: "Опут." },
+  { id: "blinded", label: "Ослеп." },
+  { id: "poisoned", label: "Отрав." },
+  { id: "charmed", label: "Очаров." },
+  { id: "stunned", label: "Ошелом." },
+  { id: "paralyzed", label: "Парализ." },
   { id: "prone", label: "Сбит" },
-  { id: "stunned", label: "Оглуш" },
-  { id: "poisoned", label: "Яд" },
-  { id: "blinded", label: "Слеп" },
-  { id: "restrained", label: "Связан" },
-  { id: "invisible", label: "Невид" },
-  { id: "charmed", label: "Чары" },
-  { id: "unconscious", label: "0 НП" },
+  { id: "grappled", label: "Схвачен" },
 ];
 
 const defaultState = {
@@ -751,11 +757,14 @@ function resizeCanvas() {
   const width = state.cols * state.cell;
   const height = state.rows * state.cell;
   const ratio = window.devicePixelRatio || 1;
-  canvas.width = Math.floor(width * ratio);
-  canvas.height = Math.floor(height * ratio);
-  canvas.style.width = `${width * (state.zoom / 100)}px`;
-  canvas.style.height = `${height * (state.zoom / 100)}px`;
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  const zoom = state.zoom / 100;
+  canvas.width = Math.floor(width * ratio * zoom);
+  canvas.height = Math.floor(height * ratio * zoom);
+  canvas.style.width = `${width * zoom}px`;
+  canvas.style.height = `${height * zoom}px`;
+  ctx.setTransform(ratio * zoom, 0, 0, ratio * zoom, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
   renderCanvas();
 }
 
@@ -933,30 +942,30 @@ function drawTokens() {
 
     if (token.name) {
       ctx.save();
-      ctx.font = "12px Inter, system-ui, sans-serif";
+      const labelHeight = screenPx(20);
+      ctx.font = `800 ${screenPx(12)}px Inter, system-ui, sans-serif`;
       const label = token.name.slice(0, 20);
       const metrics = ctx.measureText(label);
-      const labelWidth = Math.min(footprint + 36, metrics.width + 14);
+      const labelWidth = Math.min(footprint + screenPx(44), metrics.width + screenPx(14));
       const labelX = px + footprint / 2 - labelWidth / 2;
-      const labelY = py + footprint + 4;
+      const labelY = py + footprint + screenPx(4);
       ctx.fillStyle = "rgba(17, 16, 15, 0.82)";
-      roundRect(labelX, labelY, labelWidth, 20, 5);
+      roundRect(labelX, labelY, labelWidth, labelHeight, screenPx(5));
       ctx.fill();
       ctx.fillStyle = "#f3ead7";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(label, px + footprint / 2, labelY + 10, labelWidth - 8);
+      ctx.fillText(label, px + footprint / 2, labelY + labelHeight / 2, labelWidth - screenPx(8));
       ctx.restore();
     }
 
-    drawTokenCombatBadges(token, px, py, footprint);
+    drawTokenCombatBadges(token, px, py, footprint, visualX, visualY, visualSize);
   });
 }
 
-function drawTokenCombatBadges(token, px, py, footprint) {
+function drawTokenCombatBadges(token, px, py, footprint, visualX, visualY, visualSize) {
   const hp = Number.isFinite(Number(token.hp)) ? Number(token.hp) : null;
   const maxHp = Number.isFinite(Number(token.maxHp)) ? Number(token.maxHp) : null;
-  const ac = Number.isFinite(Number(token.ac)) ? Number(token.ac) : null;
   const conditions = tokenConditionsList(token);
   const note = String(token.note || "").trim();
 
@@ -964,22 +973,39 @@ function drawTokenCombatBadges(token, px, py, footprint) {
   ctx.font = `800 ${screenPx(11)}px Inter, system-ui, sans-serif`;
   ctx.textBaseline = "middle";
 
-  if (hp !== null || maxHp !== null) {
-    const label = `${hp ?? "?"}${maxHp !== null ? `/${maxHp}` : ""}`;
-    drawTokenBadge(label, px - screenPx(3), py - screenPx(8), "#7fa462", "left");
+  if (hp !== null && maxHp !== null && maxHp > 0) {
+    drawTokenHealthBar(hp, maxHp, visualX, visualY, visualSize);
   }
 
-  if (ac !== null) {
-    drawTokenBadge(`КД ${ac}`, px + footprint + screenPx(3), py - screenPx(8), "#4f8793", "right");
-  }
-
-  const tags = conditions.slice(0, 3).map((id) => tokenConditions.find((item) => item.id === id)?.label).filter(Boolean);
+  const tags = conditions.slice(0, 2).map((id) => tokenConditions.find((item) => item.id === id)?.label).filter(Boolean);
+  if (conditions.length > tags.length) tags.push(`+${conditions.length - tags.length}`);
   if (note) tags.push(note.slice(0, 10));
   if (tags.length) {
-    drawTokenBadge(tags.slice(0, 3).join(" · "), px + footprint / 2, py - screenPx(26), "#d1a850", "center");
+    drawTokenBadge(tags.slice(0, 3).join(" · "), px + footprint / 2, py - screenPx(24), "#d1a850", "center");
   }
 
   ctx.restore();
+}
+
+function drawTokenHealthBar(hp, maxHp, visualX, visualY, visualSize) {
+  const ratio = clamp(hp / maxHp, 0, 1);
+  const width = Math.max(screenPx(22), visualSize * 0.78);
+  const height = screenPx(5);
+  const x = visualX + (visualSize - width) / 2;
+  const y = visualY + visualSize - screenPx(2);
+
+  ctx.fillStyle = "rgba(18, 12, 10, 0.88)";
+  roundRect(x, y, width, height, screenPx(3));
+  ctx.fill();
+
+  ctx.fillStyle = ratio > 0.45 ? "#d65045" : ratio > 0.2 ? "#c33f32" : "#8f211d";
+  roundRect(x, y, Math.max(screenPx(2), width * ratio), height, screenPx(3));
+  ctx.fill();
+
+  ctx.lineWidth = screenPx(1);
+  ctx.strokeStyle = "rgba(255, 214, 196, 0.55)";
+  roundRect(x, y, width, height, screenPx(3));
+  ctx.stroke();
 }
 
 function drawTokenBadge(label, x, y, color, align = "center") {
@@ -1909,7 +1935,6 @@ function renderTokenDetails() {
   els.selectedTokenNameInput.value = token.name || tokenDisplayName(token);
   els.selectedTokenHpInput.value = Number.isFinite(Number(token.hp)) ? Number(token.hp) : "";
   els.selectedTokenMaxHpInput.value = Number.isFinite(Number(token.maxHp)) ? Number(token.maxHp) : "";
-  els.selectedTokenAcInput.value = Number.isFinite(Number(token.ac)) ? Number(token.ac) : "";
   els.selectedTokenNoteInput.value = token.note || "";
 
   const activeConditions = new Set(tokenConditionsList(token));
@@ -2056,17 +2081,6 @@ els.selectedTokenMaxHpInput.addEventListener("change", (event) => {
       delete token.maxHp;
     } else {
       token.maxHp = value;
-    }
-  });
-});
-
-els.selectedTokenAcInput.addEventListener("change", (event) => {
-  updateSelectedToken((token) => {
-    const value = event.target.value === "" ? null : clamp(Number(event.target.value) || 0, 0, 99);
-    if (value === null) {
-      delete token.ac;
-    } else {
-      token.ac = value;
     }
   });
 });

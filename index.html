@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>D&D Battle Table</title>
-    <link rel="stylesheet" href="styles.css?v=2026-05-19-4" />
+    <link rel="stylesheet" href="styles.css?v=2026-05-19-5" />
   </head>
   <body>
     <div class="app" data-theme="ember">
@@ -297,7 +297,7 @@
                 <span>Имя</span>
                 <input id="selectedTokenNameInput" type="text" maxlength="28" />
               </label>
-              <div class="field-grid three">
+              <div class="field-grid two">
                 <label>
                   <span>НП</span>
                   <input id="selectedTokenHpInput" type="number" min="0" max="999" />
@@ -305,10 +305,6 @@
                 <label>
                   <span>Макс</span>
                   <input id="selectedTokenMaxHpInput" type="number" min="0" max="999" />
-                </label>
-                <label>
-                  <span>КД</span>
-                  <input id="selectedTokenAcInput" type="number" min="0" max="99" />
                 </label>
               </div>
               <div class="token-condition-grid" id="tokenConditionGrid" aria-label="Состояния фигурки"></div>
@@ -363,6 +359,6 @@
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
     </div>
 
-    <script src="app.js?v=2026-05-19-4"></script>
+    <script src="app.js?v=2026-05-19-5"></script>
   </body>
 </html>
