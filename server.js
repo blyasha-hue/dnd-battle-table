@@ -10,7 +10,7 @@ const DATA_DIR = process.env.DATA_DIR || ROOT;
 const ROOMS_DIR = path.join(DATA_DIR, ".rooms");
 const MAX_BODY = 25 * 1024 * 1024;
 const PRESENCE_TTL = 45 * 1000;
-const PLAYER_STATE_FIELDS = new Set(["playerNotes", "pings", "measurement", "templates", "rollLog"]);
+const PLAYER_STATE_FIELDS = new Set(["playerNotes", "pings", "measurement", "templates", "rollLog", "terrain"]);
 const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object || {}, key);
 const TOKEN_MOVE_MODES = new Set(["all", "owned", "master"]);
 

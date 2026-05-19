@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>D&D Battle Table</title>
-    <link rel="stylesheet" href="styles.css?v=2026-05-19-13" />
+    <link rel="stylesheet" href="styles.css?v=2026-05-19-14" />
   </head>
   <body>
     <div class="app" data-theme="ember">
@@ -270,11 +270,11 @@
                 <span class="tool-icon template-icon"></span>
                 <span>Шаблон</span>
               </button>
-              <button class="tool-button active" data-tool="paint" data-master-tool type="button" title="Кисть · 5">
+              <button class="tool-button active" data-tool="paint" type="button" title="Кисть · 5">
                 <span class="tool-icon brush-icon"></span>
                 <span>Кисть</span>
               </button>
-              <button class="tool-button" data-tool="erase" data-master-tool type="button" title="Ластик · 6">
+              <button class="tool-button" data-tool="erase" type="button" title="Ластик · 6">
                 <span class="tool-icon erase-icon"></span>
                 <span>Ластик</span>
               </button>
@@ -284,7 +284,7 @@
               </button>
             </div>
 
-            <div class="paint-controls" data-master-only>
+            <div class="paint-controls">
               <label>
                 <span>Прозрачность: <strong id="brushOpacityValue">100%</strong></span>
                 <input id="brushOpacityInput" type="range" min="10" max="100" value="100" />
@@ -418,6 +418,7 @@
             <div class="button-row">
               <button id="rollAdvBtn" type="button">Преимущество</button>
               <button id="rollDisBtn" type="button">Помеха</button>
+              <button id="clearRollLogBtn" type="button">Очистить</button>
             </div>
             <ol class="roll-log" id="rollLog" aria-live="polite"></ol>
           </section>
@@ -434,6 +435,7 @@
               <button class="collapse-button" id="topDrawerToggle" type="button" title="Свернуть верх" aria-label="Свернуть верх">⌃</button>
             </div>
           </div>
+          <div class="initiative-strip" id="initiativeTracker" aria-label="Порядок инициативы"></div>
           <div class="canvas-shell" id="canvasShell">
             <canvas id="battleCanvas" aria-label="Карта боя"></canvas>
           </div>
@@ -444,6 +446,6 @@
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
     </div>
 
-    <script src="app.js?v=2026-05-19-13"></script>
+    <script src="app.js?v=2026-05-19-14"></script>
   </body>
 </html>

@@ -385,6 +385,27 @@ h1 {
   grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr) minmax(300px, 0.9fr);
 }
 
+.player-role .notes-grid {
+  grid-template-columns: 1fr;
+}
+
+.player-role .notes-grid .panel:not([hidden]) {
+  min-height: 240px;
+}
+
+.player-role #playerNotesInput {
+  min-height: 190px;
+}
+
+.player-role .library-grid {
+  grid-template-columns: 1fr;
+}
+
+.player-role #tokenAssets {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  max-height: 205px;
+}
+
 .music-panel-wide {
   grid-column: span 2;
 }
@@ -974,6 +995,90 @@ h1 {
   box-shadow: inset 0 0 10px rgba(227, 182, 92, 0.08);
 }
 
+.initiative-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 7px 12px;
+  border-bottom: 1px solid rgba(217, 169, 77, 0.32);
+  background:
+    linear-gradient(90deg, rgba(85, 184, 199, 0.08), transparent 32%, rgba(217, 169, 77, 0.08)),
+    #0f141c;
+  overflow-x: auto;
+}
+
+.initiative-round {
+  flex: 0 0 auto;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(217, 169, 77, 0.62);
+  border-radius: 999px;
+  padding: 0 10px;
+  background:
+    linear-gradient(180deg, rgba(217, 169, 77, 0.18), rgba(90, 38, 48, 0.22)),
+    rgba(8, 11, 15, 0.66);
+  color: #ffe3a6;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.initiative-track-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.initiative-track-item {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  max-width: 210px;
+  border-radius: 999px;
+  padding: 0 10px 0 6px;
+  background:
+    linear-gradient(180deg, rgba(185, 192, 189, 0.08), rgba(0, 0, 0, 0.12)),
+    #151b25;
+  font-size: 12px;
+}
+
+.initiative-track-item.active-turn {
+  border-color: rgba(217, 169, 77, 0.84);
+  background:
+    linear-gradient(180deg, rgba(217, 169, 77, 0.25), rgba(90, 38, 48, 0.42)),
+    #1f1b21;
+  box-shadow: 0 0 16px rgba(217, 169, 77, 0.18);
+}
+
+.initiative-track-item.active-focus {
+  border-color: #ffe07a;
+  box-shadow:
+    0 0 0 1px rgba(255, 224, 122, 0.5),
+    0 0 20px rgba(255, 224, 122, 0.28);
+}
+
+.initiative-track-rank {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(8, 11, 15, 0.72);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.initiative-track-name {
+  overflow: hidden;
+  max-width: 150px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .canvas-shell {
   flex: 1;
   min-height: 0;
@@ -1086,6 +1191,7 @@ canvas {
   gap: 10px;
   align-items: center;
   min-height: 52px;
+  cursor: pointer;
   border: 1px solid rgba(166, 129, 73, 0.42);
   border-radius: var(--radius);
   background:
@@ -1161,6 +1267,19 @@ canvas {
   min-width: 32px;
   min-height: 32px;
   padding: 0;
+}
+
+.asset-actions {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.asset-delete {
+  min-width: 28px;
+  min-height: 28px;
+  border-color: rgba(200, 109, 85, 0.58);
+  color: #ffd7c8;
 }
 
 audio {
@@ -1514,6 +1633,10 @@ audio {
     min-height: 460px;
     max-height: none;
     padding: 10px;
+  }
+
+  .initiative-strip {
+    align-items: flex-start;
   }
 
   .field-grid.two,

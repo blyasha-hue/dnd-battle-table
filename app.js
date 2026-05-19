@@ -6,7 +6,7 @@ const SAVE_SLOTS_KEY = "dnd-battle-table-save-slots";
 const PROFILE_KEY = "dnd-battle-table-player-profile";
 const ROLE_KEY = "dnd-battle-table-role";
 const PLAYER_TOKEN_ASSETS_KEY = "dnd-battle-table-player-token-assets";
-const PLAYER_TOOLS = new Set(["select", "ping", "measure", "template", "token"]);
+const PLAYER_TOOLS = new Set(["select", "ping", "measure", "template", "token", "paint", "erase"]);
 const MAP_LIMITS = {
   minCols: 8,
   maxCols: 160,
@@ -83,6 +83,7 @@ const els = {
   collectInitiativeBtn: document.querySelector("#collectInitiativeBtn"),
   clearInitiativeBtn: document.querySelector("#clearInitiativeBtn"),
   initiativeList: document.querySelector("#initiativeList"),
+  initiativeTracker: document.querySelector("#initiativeTracker"),
   tokenDetailsEmpty: document.querySelector("#tokenDetailsEmpty"),
   tokenDetailsForm: document.querySelector("#tokenDetailsForm"),
   selectedTokenNameInput: document.querySelector("#selectedTokenNameInput"),
@@ -103,6 +104,7 @@ const els = {
   createSaveSlotBtn: document.querySelector("#createSaveSlotBtn"),
   saveSlotList: document.querySelector("#saveSlotList"),
   diceFormulaInput: document.querySelector("#diceFormulaInput"),
+  clearRollLogBtn: document.querySelector("#clearRollLogBtn"),
   rollLog: document.querySelector("#rollLog"),
 };
 
@@ -173,6 +175,7 @@ const defaultState = {
   pings: [],
   initiative: [],
   activeInitiativeId: null,
+  initiativeRound: 1,
   tokenMoveMode: "all",
   selectedTemplateShape: "circle",
   selectedTemplateSize: 20,
@@ -284,6 +287,43 @@ function getClientId() {
   return id;
 }
 
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+async function imageFileToDataUrl(file, { maxSize = 900, quality = 0.82 } = {}) {
+  const original = await readFileAsDataUrl(file);
+  try {
+    const img = await loadImage(original);
+    const scale = Math.min(1, maxSize / Math.max(img.naturalWidth, img.naturalHeight));
+    if (scale >= 1 && original.length < maxSize * maxSize * 2) return original;
+    const canvasEl = document.createElement("canvas");
+    canvasEl.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvasEl.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const canvasCtx = canvasEl.getContext("2d");
+    canvasCtx.imageSmoothingEnabled = true;
+    canvasCtx.imageSmoothingQuality = "high";
+    canvasCtx.drawImage(img, 0, 0, canvasEl.width, canvasEl.height);
+    return canvasEl.toDataURL("image/jpeg", quality);
+  } catch {
+    return original;
+  }
+}
+
 function cleanRoomId(value) {
   return (
     String(value || "main")
@@ -318,6 +358,7 @@ function sceneFromState(source, overrides = {}) {
     measurement: source.measurement ? structuredClone(source.measurement) : null,
     initiative: structuredClone(source.initiative || []),
     activeInitiativeId: source.activeInitiativeId || null,
+    initiativeRound: Math.max(1, Number(source.initiativeRound) || 1),
   };
 }
 
@@ -339,6 +380,7 @@ function blankScene(name = "Новая сцена") {
     measurement: null,
     initiative: [],
     activeInitiativeId: null,
+    initiativeRound: 1,
   };
 }
 
@@ -360,6 +402,7 @@ function normalizeScenes(target) {
     measurement: scene.measurement || null,
     initiative: scene.initiative || [],
     activeInitiativeId: scene.activeInitiativeId || null,
+    initiativeRound: Math.max(1, Number(scene.initiativeRound) || 1),
     background: scene.background || null,
     backgroundHidden: scene.backgroundHidden === true,
   }));
@@ -398,6 +441,7 @@ function applySceneToState(target, scene) {
   target.measurement = scene.measurement ? structuredClone(scene.measurement) : null;
   target.initiative = structuredClone(scene.initiative || []);
   target.activeInitiativeId = scene.activeInitiativeId || null;
+  target.initiativeRound = Math.max(1, Number(scene.initiativeRound) || 1);
   normalizeInitiative(target);
   target.selectedObject = null;
 }
@@ -1105,6 +1149,7 @@ function renderAll() {
   renderScenes();
   renderAssets();
   renderInitiative();
+  renderInitiativeTracker();
   renderTokenDetails();
   renderMusic();
   renderNotesAndSaves();
@@ -2150,7 +2195,7 @@ canvas.addEventListener("pointerdown", (event) => {
     return;
   }
 
-  if (!isMaster() && ["paint", "erase", "fog", "token", "image"].includes(state.activeTool)) {
+  if (!isMaster() && ["fog", "image"].includes(state.activeTool)) {
     if (state.activeTool === "token" && isPlayerView()) {
       placeToken(point);
       return;
@@ -2308,8 +2353,9 @@ function renderAssetList({ container, assets, selectedId, type }) {
     return;
   }
   assets.forEach((asset) => {
-    const item = document.createElement("button");
-    item.type = "button";
+    const item = document.createElement("div");
+    item.role = "button";
+    item.tabIndex = 0;
     item.className = `asset-item ${selectedId === asset.id ? "selected" : ""}`;
     item.innerHTML = `
       <img class="asset-thumb" src="${asset.src}" alt="">
@@ -2317,9 +2363,12 @@ function renderAssetList({ container, assets, selectedId, type }) {
         <div class="asset-title">${escapeHtml(asset.name)}</div>
         <div class="asset-meta">${type === "token" ? (isPlayerView() ? "Личная фигурка" : "Фигурка") : "Картинка"}</div>
       </div>
-      <span class="icon-action" aria-hidden="true">+</span>
+      <span class="asset-actions">
+        <span class="icon-action add-asset-action" aria-hidden="true">+</span>
+        <button class="icon-action asset-delete" type="button" aria-label="Удалить из библиотеки">×</button>
+      </span>
     `;
-    item.addEventListener("click", () => {
+    const selectAsset = () => {
       if (type === "token") {
         state.selectedTokenAssetId = asset.id;
         state.activeTool = "token";
@@ -2328,13 +2377,53 @@ function renderAssetList({ container, assets, selectedId, type }) {
         state.activeTool = "image";
       }
       renderAll();
-      if (type === "token" && isPlayerView()) {
-        showToast("Фигурка добавлена в личную библиотеку.");
-      }
       showToast(type === "token" ? "Кликни по клетке, чтобы поставить фигурку." : "Кликни по полю, чтобы показать картинку.");
+    };
+    item.addEventListener("click", selectAsset);
+    item.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      selectAsset();
+    });
+    item.querySelector(".asset-delete").addEventListener("click", (event) => {
+      event.stopPropagation();
+      removeAsset(asset, type);
     });
     container.appendChild(item);
   });
+}
+
+function removeAsset(asset, type) {
+  if (!asset) return;
+  if (type === "token") {
+    const used = state.tokens.some((token) => token.assetId === asset.id);
+    if (used && !isPlayerView()) {
+      showToast("Эта фигурка уже стоит на карте.");
+      return;
+    }
+    if (isPlayerView()) {
+      playerTokenAssets = playerTokenAssets.filter((item) => item.id !== asset.id);
+      persistPlayerTokenAssets();
+      if (state.selectedTokenAssetId === asset.id) state.selectedTokenAssetId = null;
+      renderAll();
+      showToast("Фигурка удалена из личной библиотеки.");
+      return;
+    }
+    captureUndo();
+    state.tokenAssets = state.tokenAssets.filter((item) => item.id !== asset.id);
+    if (state.selectedTokenAssetId === asset.id) state.selectedTokenAssetId = null;
+  } else {
+    const used = state.handouts.some((handout) => handout.assetId === asset.id);
+    if (used) {
+      showToast("Эта картинка уже размещена на карте.");
+      return;
+    }
+    captureUndo();
+    state.handoutAssets = state.handoutAssets.filter((item) => item.id !== asset.id);
+    if (state.selectedHandoutAssetId === asset.id) state.selectedHandoutAssetId = null;
+  }
+  renderAll();
+  showToast("Удалено из библиотеки.");
 }
 
 function renderInitiative() {
@@ -2413,6 +2502,48 @@ function renderInitiative() {
     });
 
     els.initiativeList.appendChild(item);
+  });
+}
+
+function renderInitiativeTracker() {
+  if (!els.initiativeTracker) return;
+  normalizeInitiative(state);
+  els.initiativeTracker.innerHTML = "";
+
+  const round = Math.max(1, Number(state.initiativeRound) || 1);
+  const roundBadge = document.createElement("div");
+  roundBadge.className = "initiative-round";
+  roundBadge.textContent = `Раунд ${round}`;
+  els.initiativeTracker.appendChild(roundBadge);
+
+  if (!state.initiative.length) {
+    const empty = document.createElement("div");
+    empty.className = "initiative-track-empty";
+    empty.textContent = "Инициатива не собрана";
+    els.initiativeTracker.appendChild(empty);
+    return;
+  }
+
+  const activeGroup = currentInitiativeTokenIds();
+  state.initiative.forEach((entry, index) => {
+    const item = document.createElement("button");
+    const isActive = activeGroup.has(entry.tokenId);
+    const isFocus = entry.id === state.activeInitiativeId;
+    item.type = "button";
+    item.className = `initiative-track-item ${isActive ? "active-turn" : ""} ${isFocus ? "active-focus" : ""}`;
+    item.innerHTML = `
+      <span class="initiative-track-rank">${index + 1}</span>
+      <span class="initiative-track-name">${escapeHtml(entry.name)}</span>
+    `;
+    item.addEventListener("click", () => {
+      if (isPlayerView()) return;
+      const token = state.tokens.find((candidate) => candidate.id === entry.tokenId);
+      captureUndo();
+      state.activeInitiativeId = entry.id;
+      if (token) state.selectedObject = { type: "token", id: token.id };
+      renderAll();
+    });
+    els.initiativeTracker.appendChild(item);
   });
 }
 
@@ -2505,6 +2636,7 @@ function collectInitiativeFromMap() {
   });
   sortInitiative();
   state.activeInitiativeId = state.activeInitiativeId || state.initiative[0]?.id || null;
+  state.initiativeRound = Math.max(1, Number(state.initiativeRound) || 1);
   renderAll();
 }
 
@@ -2524,6 +2656,9 @@ function nextInitiativeTurn() {
 
   const range = initiativeGroupRange();
   const nextIndex = range ? (range.end + 1) % state.initiative.length : 0;
+  if (range && nextIndex <= range.end) {
+    state.initiativeRound = Math.max(1, Number(state.initiativeRound) || 1) + 1;
+  }
   state.activeInitiativeId = state.initiative[nextIndex].id;
   renderAll();
 }
@@ -2999,6 +3134,13 @@ document.querySelector("#rollDisBtn").addEventListener("click", () => {
   addRoll("Помеха", Math.min(first, second), `d20 [${first}, ${second}]`);
 });
 
+els.clearRollLogBtn.addEventListener("click", () => {
+  state.rollLog = [];
+  renderRollLog();
+  saveState();
+  showToast("История бросков очищена.");
+});
+
 document.querySelectorAll(".tool-button").forEach((button) => {
   button.addEventListener("click", () => {
     if (isPlayerView() && !PLAYER_TOOLS.has(button.dataset.tool)) {
@@ -3111,6 +3253,7 @@ els.clearInitiativeBtn.addEventListener("click", () => {
   captureUndo();
   state.initiative = [];
   state.activeInitiativeId = null;
+  state.initiativeRound = 1;
   renderAll();
 });
 
