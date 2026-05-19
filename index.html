@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>D&D Battle Table</title>
-    <link rel="stylesheet" href="styles.css?v=2026-05-19-6" />
+    <link rel="stylesheet" href="styles.css?v=2026-05-19-7" />
   </head>
   <body>
     <div class="app" data-theme="ember">
@@ -32,6 +32,7 @@
           <button class="drawer-tab active" data-drawer-tab="room" type="button">Комната</button>
           <button class="drawer-tab" data-drawer-tab="library" type="button">Библиотеки</button>
           <button class="drawer-tab" data-drawer-tab="sound" type="button">Звук</button>
+          <button class="drawer-tab" data-drawer-tab="notes" type="button">Заметки</button>
         </div>
 
         <div class="drawer-page active" data-drawer-page="room">
@@ -186,6 +187,32 @@
           <section class="panel">
             <h2>Звук сцены</h2>
             <p class="online-hint">Здесь позже будут пресеты музыки, атмосферные эффекты и быстрые звуки.</p>
+          </section>
+        </div>
+        </div>
+
+        <div class="drawer-page" data-drawer-page="notes">
+        <div class="drawer-grid notes-grid">
+          <section class="panel">
+            <h2>Заметки мастера</h2>
+            <textarea id="gmNotesInput" class="notes-area" placeholder="Секреты, планы, НПС, ловушки..."></textarea>
+            <p class="online-hint">Хранятся только в этом браузере.</p>
+          </section>
+          <section class="panel">
+            <h2>Заметки игроков</h2>
+            <textarea id="playerNotesInput" class="notes-area" placeholder="Общие цели, имена, найденные улики..."></textarea>
+            <p class="online-hint">Синхронизируются в комнате.</p>
+          </section>
+          <section class="panel">
+            <div class="panel-heading">
+              <h2>Сохранения</h2>
+              <button id="createSaveSlotBtn" class="mini-button" type="button">Сохранить</button>
+            </div>
+            <label>
+              <span>Название</span>
+              <input id="saveSlotNameInput" type="text" maxlength="36" placeholder="Перед боем, город, финал..." />
+            </label>
+            <div class="save-slot-list" id="saveSlotList"></div>
           </section>
         </div>
         </div>
@@ -381,6 +408,6 @@
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
     </div>
 
-    <script src="app.js?v=2026-05-19-6"></script>
+    <script src="app.js?v=2026-05-19-7"></script>
   </body>
 </html>

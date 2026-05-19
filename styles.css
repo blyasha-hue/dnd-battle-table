@@ -246,6 +246,10 @@ h1 {
   grid-template-columns: repeat(2, minmax(320px, 1fr));
 }
 
+.notes-grid {
+  grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr) minmax(300px, 0.9fr);
+}
+
 .music-panel-wide {
   grid-column: span 2;
 }
@@ -694,6 +698,55 @@ canvas {
   padding-right: 4px;
 }
 
+.notes-area {
+  width: 100%;
+  min-height: 152px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #171614;
+  color: var(--ink);
+  padding: 10px;
+  font: inherit;
+  line-height: 1.42;
+}
+
+.save-slot-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  max-height: 180px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.save-slot-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 46px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #191815;
+  padding: 8px;
+}
+
+.save-slot-title {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.save-slot-meta {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 #tokenAssets {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -1064,7 +1117,8 @@ audio {
 
   .room-grid,
   .library-grid,
-  .sound-grid {
+  .sound-grid,
+  .notes-grid {
     grid-template-columns: 1fr;
   }
 

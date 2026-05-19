@@ -1,6 +1,8 @@
 const STORAGE_KEY = "dnd-battle-table-v1";
 const CLIENT_KEY = "dnd-battle-table-client-id";
 const ROOM_KEY = "dnd-battle-table-room";
+const GM_NOTES_KEY = "dnd-battle-table-gm-notes";
+const SAVE_SLOTS_KEY = "dnd-battle-table-save-slots";
 const MAP_LIMITS = {
   minCols: 8,
   maxCols: 160,
@@ -82,6 +84,11 @@ const els = {
   musicFileInput: document.querySelector("#musicFileInput"),
   musicList: document.querySelector("#musicList"),
   audioPlayer: document.querySelector("#audioPlayer"),
+  gmNotesInput: document.querySelector("#gmNotesInput"),
+  playerNotesInput: document.querySelector("#playerNotesInput"),
+  saveSlotNameInput: document.querySelector("#saveSlotNameInput"),
+  createSaveSlotBtn: document.querySelector("#createSaveSlotBtn"),
+  saveSlotList: document.querySelector("#saveSlotList"),
   diceFormulaInput: document.querySelector("#diceFormulaInput"),
   rollLog: document.querySelector("#rollLog"),
 };
@@ -165,11 +172,14 @@ const defaultState = {
   scenes: [],
   musicTracks: [],
   currentTrackId: null,
+  playerNotes: "",
   rollLog: [],
 };
 
 let state = loadState();
 normalizeScenes(state);
+let gmNotes = safeStorageGet(localStorage, GM_NOTES_KEY) || "";
+let saveSlots = loadSaveSlots();
 let drag = null;
 let draftTemplate = null;
 let imageCache = new Map();
@@ -542,6 +552,21 @@ function loadState() {
   }
 }
 
+function loadSaveSlots() {
+  try {
+    const raw = safeStorageGet(localStorage, SAVE_SLOTS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((slot) => slot?.id && slot?.state) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistSaveSlots() {
+  safeStorageSet(localStorage, SAVE_SLOTS_KEY, JSON.stringify(saveSlots.slice(0, 6)));
+}
+
 function serializeState(source) {
   return {
     ...source,
@@ -827,6 +852,7 @@ function renderAll() {
   renderInitiative();
   renderTokenDetails();
   renderMusic();
+  renderNotesAndSaves();
   renderRollLog();
   saveState();
 }
@@ -2254,6 +2280,62 @@ function renderMusic() {
   });
 }
 
+function saveSlotLabel(slot) {
+  const date = new Date(slot.updatedAt || slot.createdAt || Date.now());
+  return date.toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function renderNotesAndSaves() {
+  els.gmNotesInput.value = gmNotes;
+  els.playerNotesInput.value = state.playerNotes || "";
+  els.saveSlotList.innerHTML = "";
+
+  if (!saveSlots.length) {
+    const empty = document.createElement("div");
+    empty.className = "initiative-empty";
+    empty.textContent = "Слотов пока нет.";
+    els.saveSlotList.appendChild(empty);
+    return;
+  }
+
+  saveSlots.forEach((slot) => {
+    const item = document.createElement("div");
+    item.className = "save-slot-item";
+    item.innerHTML = `
+      <div>
+        <div class="save-slot-title">${escapeHtml(slot.name || "Сохранение")}</div>
+        <div class="save-slot-meta">${escapeHtml(saveSlotLabel(slot))}</div>
+      </div>
+      <button class="mini-button save-load" type="button">Загрузить</button>
+      <button class="icon-action save-delete" type="button" aria-label="Удалить сохранение">×</button>
+    `;
+    item.querySelector(".save-load").addEventListener("click", () => {
+      captureUndo();
+      state = {
+        ...structuredClone(defaultState),
+        ...structuredClone(slot.state),
+        musicTracks: (slot.state.musicTracks || []).filter((track) => !track.transient),
+      };
+      normalizeScenes(state);
+      imageCache = new Map();
+      renderAll();
+      showToast("Сохранение загружено.");
+    });
+    item.querySelector(".save-delete").addEventListener("click", () => {
+      saveSlots = saveSlots.filter((saved) => saved.id !== slot.id);
+      persistSaveSlots();
+      renderNotesAndSaves();
+      showToast("Сохранение удалено.");
+    });
+    els.saveSlotList.appendChild(item);
+  });
+}
+
 document.querySelector("#addMusicUrlBtn").addEventListener("click", () => {
   const src = els.musicUrlInput.value.trim();
   if (!src) {
@@ -2268,6 +2350,41 @@ document.querySelector("#addMusicUrlBtn").addEventListener("click", () => {
   els.musicNameInput.value = "";
   renderAll();
   showToast("Трек добавлен в плейлист.");
+});
+
+els.gmNotesInput.addEventListener("input", (event) => {
+  gmNotes = event.target.value;
+  safeStorageSet(localStorage, GM_NOTES_KEY, gmNotes);
+});
+
+els.playerNotesInput.addEventListener("input", (event) => {
+  state.playerNotes = event.target.value;
+  saveState();
+});
+
+els.createSaveSlotBtn.addEventListener("click", () => {
+  saveActiveScene();
+  const now = Date.now();
+  const name = els.saveSlotNameInput.value.trim() || `${state.sceneName || "Сцена"} ${new Date(now).toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  })}`;
+  saveSlots = [
+    {
+      id: uid("save"),
+      name,
+      createdAt: now,
+      updatedAt: now,
+      state: serializeState(state),
+    },
+    ...saveSlots,
+  ].slice(0, 6);
+  persistSaveSlots();
+  els.saveSlotNameInput.value = "";
+  renderNotesAndSaves();
+  showToast("Сохранение создано.");
 });
 
 els.joinRoomBtn.addEventListener("click", () => {
