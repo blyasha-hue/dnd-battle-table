@@ -85,6 +85,17 @@ const toolNames = {
   ping: "Пинг",
 };
 
+const TEMPLATE_COVERAGE_THRESHOLD = 0.5;
+const TEMPLATE_COVERAGE_SAMPLES = 9;
+const TEMPLATE_CONE_SPREAD = Math.PI / 6;
+const initiativeSides = ["red", "blue", "gray", "green"];
+const initiativeSideLabels = {
+  red: "Красная команда",
+  blue: "Синяя команда",
+  gray: "Серая команда",
+  green: "Зеленая команда",
+};
+
 const defaultState = {
   sceneName: "Засада у старой дороги",
   cols: 24,
@@ -138,16 +149,6 @@ let pingAnimationTimer = null;
 const undoStack = [];
 const UNDO_LIMIT = 20;
 const PING_DURATION = 1600;
-const TEMPLATE_COVERAGE_THRESHOLD = 0.5;
-const TEMPLATE_COVERAGE_SAMPLES = 9;
-const TEMPLATE_CONE_SPREAD = Math.PI / 6;
-const initiativeSides = ["red", "blue", "gray", "green"];
-const initiativeSideLabels = {
-  red: "Красная команда",
-  blue: "Синяя команда",
-  gray: "Серая команда",
-  green: "Зеленая команда",
-};
 
 const sync = {
   online: location.protocol === "http:" || location.protocol === "https:",
