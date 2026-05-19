@@ -41,6 +41,11 @@ const els = {
   brushSizeInput: document.querySelector("#brushSizeInput"),
   brushSizeValue: document.querySelector("#brushSizeValue"),
   brushPreview: document.querySelector("#brushPreview"),
+  fogModeInput: document.querySelector("#fogModeInput"),
+  fogSizeInput: document.querySelector("#fogSizeInput"),
+  fogSizeValue: document.querySelector("#fogSizeValue"),
+  coverFogBtn: document.querySelector("#coverFogBtn"),
+  clearFogBtn: document.querySelector("#clearFogBtn"),
   sceneNameInput: document.querySelector("#sceneNameInput"),
   sceneList: document.querySelector("#sceneList"),
   newSceneBtn: document.querySelector("#newSceneBtn"),
@@ -90,6 +95,7 @@ const toolNames = {
   measure: "Линейка",
   template: "Шаблон",
   ping: "Пинг",
+  fog: "Туман",
 };
 
 const TEMPLATE_COVERAGE_THRESHOLD = 0.5;
@@ -134,6 +140,9 @@ const defaultState = {
   brushLight: 100,
   brushOpacity: 100,
   brushSize: 1,
+  fog: {},
+  fogMode: "reveal",
+  fogSize: 3,
   terrain: {},
   tokenAssets: [],
   handoutAssets: [],
@@ -268,6 +277,7 @@ function sceneFromState(source, overrides = {}) {
     showGrid: source.showGrid !== false,
     background: source.background || null,
     backgroundHidden: source.backgroundHidden === true,
+    fog: structuredClone(source.fog || {}),
     terrain: structuredClone(source.terrain || {}),
     tokens: structuredClone(source.tokens || []),
     handouts: structuredClone(source.handouts || []),
@@ -288,6 +298,7 @@ function blankScene(name = "Новая сцена") {
     showGrid: true,
     background: null,
     backgroundHidden: false,
+    fog: {},
     terrain: {},
     tokens: [],
     handouts: [],
@@ -309,6 +320,7 @@ function normalizeScenes(target) {
     ...blankScene(index === 0 ? "Стартовая сцена" : `Сцена ${index + 1}`),
     ...scene,
     terrain: scene.terrain || {},
+    fog: scene.fog || {},
     tokens: scene.tokens || [],
     handouts: scene.handouts || [],
     templates: scene.templates || [],
@@ -345,6 +357,7 @@ function applySceneToState(target, scene) {
   target.showGrid = scene.showGrid !== false;
   target.background = scene.background || null;
   target.backgroundHidden = scene.backgroundHidden === true;
+  target.fog = structuredClone(scene.fog || {});
   target.terrain = structuredClone(scene.terrain || {});
   target.tokens = structuredClone(scene.tokens || []);
   target.handouts = structuredClone(scene.handouts || []);
@@ -479,6 +492,10 @@ function clampObjectsToMap() {
   Object.keys(state.terrain).forEach((key) => {
     const [x, y] = key.split(",").map(Number);
     if (x >= state.cols || y >= state.rows) delete state.terrain[key];
+  });
+  Object.keys(state.fog || {}).forEach((key) => {
+    const [x, y] = key.split(",").map(Number);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x >= state.cols || y >= state.rows) delete state.fog[key];
   });
   state.templates = (state.templates || []).map((template) => {
     const x = Number.isFinite(Number(template.x)) ? Number(template.x) : 0;
@@ -786,6 +803,9 @@ function syncInputs() {
   els.brushSizeInput.value = state.brushSize;
   els.brushSizeValue.textContent = state.brushSize;
   els.brushPreview.style.setProperty("--brush-preview", brushColorString());
+  els.fogModeInput.value = state.fogMode;
+  els.fogSizeInput.value = state.fogSize;
+  els.fogSizeValue.textContent = state.fogSize;
   els.templateShapeInput.value = state.selectedTemplateShape;
   els.templateSizeInput.value = state.selectedTemplateSize;
   els.templateCenterInput.value = state.selectedTemplateCenter;
@@ -841,6 +861,7 @@ function renderCanvas() {
   drawGrid(width, height);
   drawTemplates();
   drawTokens();
+  drawFog(width, height);
   drawPings();
   drawMeasurement();
   drawSelection();
@@ -875,6 +896,28 @@ function drawTerrain() {
     ctx.fillStyle = "rgba(0, 0, 0, 0.12)";
     ctx.fillRect(x * state.cell, y * state.cell + state.cell * 0.72, state.cell, state.cell * 0.28);
   });
+}
+
+function drawFog(width, height) {
+  const fogEntries = Object.keys(state.fog || {});
+  if (!fogEntries.length) return;
+
+  ctx.save();
+  fogEntries.forEach((key) => {
+    const [x, y] = key.split(",").map(Number);
+    if (x < 0 || y < 0 || x >= state.cols || y >= state.rows) return;
+    const px = x * state.cell;
+    const py = y * state.cell;
+    ctx.fillStyle = "rgba(3, 3, 4, 0.92)";
+    ctx.fillRect(px, py, state.cell, state.cell);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.035)";
+    ctx.fillRect(px, py, state.cell, Math.max(1, state.cell * 0.08));
+  });
+
+  ctx.strokeStyle = "rgba(209, 168, 80, 0.08)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
+  ctx.restore();
 }
 
 function drawGrid(width, height) {
@@ -1476,6 +1519,25 @@ function setTerrainAt(point) {
   saveState();
 }
 
+function setFogAt(point) {
+  const size = clamp(Number(state.fogSize) || 1, 1, 12);
+  const offset = Math.floor((size - 1) / 2);
+  if (!state.fog) state.fog = {};
+  for (let y = point.cellY - offset; y < point.cellY - offset + size; y += 1) {
+    for (let x = point.cellX - offset; x < point.cellX - offset + size; x += 1) {
+      if (x < 0 || y < 0 || x >= state.cols || y >= state.rows) continue;
+      const key = `${x},${y}`;
+      if (state.fogMode === "hide") {
+        state.fog[key] = true;
+      } else {
+        delete state.fog[key];
+      }
+    }
+  }
+  renderCanvas();
+  saveState();
+}
+
 function objectAt(point) {
   for (let i = state.tokens.length - 1; i >= 0; i -= 1) {
     const token = state.tokens[i];
@@ -1693,6 +1755,13 @@ canvas.addEventListener("pointerdown", (event) => {
     return;
   }
 
+  if (state.activeTool === "fog") {
+    captureUndo();
+    drag = { type: "fog" };
+    setFogAt(point);
+    return;
+  }
+
   if (state.activeTool === "measure") {
     captureUndo();
     startMeasurement(point);
@@ -1725,6 +1794,8 @@ canvas.addEventListener("pointermove", (event) => {
   const point = canvasPoint(event);
   if (drag.type === "paint") {
     setTerrainAt(point);
+  } else if (drag.type === "fog") {
+    setFogAt(point);
   } else if (drag.type === "measure") {
     updateMeasurement(point);
   } else if (drag.type === "template") {
@@ -2358,6 +2429,37 @@ els.brushSizeInput.addEventListener("input", (event) => {
   saveState();
 });
 
+els.fogModeInput.addEventListener("change", (event) => {
+  state.fogMode = event.target.value === "hide" ? "hide" : "reveal";
+  syncInputs();
+  saveState();
+});
+
+els.fogSizeInput.addEventListener("input", (event) => {
+  state.fogSize = clamp(Number(event.target.value) || 3, 1, 12);
+  syncInputs();
+  saveState();
+});
+
+els.coverFogBtn.addEventListener("click", () => {
+  captureUndo();
+  state.fog = {};
+  for (let y = 0; y < state.rows; y += 1) {
+    for (let x = 0; x < state.cols; x += 1) {
+      state.fog[`${x},${y}`] = true;
+    }
+  }
+  renderAll();
+  showToast("Карта закрыта туманом.");
+});
+
+els.clearFogBtn.addEventListener("click", () => {
+  captureUndo();
+  state.fog = {};
+  renderAll();
+  showToast("Туман очищен.");
+});
+
 els.templateShapeInput.addEventListener("change", (event) => {
   state.selectedTemplateShape = event.target.value;
   syncInputs();
@@ -2502,6 +2604,7 @@ document.querySelector("#newMapBtn").addEventListener("click", () => {
   state.cell = clamp(Number(els.cellInput.value) || state.cell, MAP_LIMITS.minCell, MAP_LIMITS.maxCell);
   clampObjectsToMap();
   state.terrain = {};
+  state.fog = {};
   state.tokens = [];
   state.handouts = [];
   state.templates = [];
@@ -2618,6 +2721,8 @@ window.addEventListener("keydown", (event) => {
     Numpad5: "paint",
     Digit6: "erase",
     Numpad6: "erase",
+    Digit7: "fog",
+    Numpad7: "fog",
   };
   const keyMap = {
     v: "select",
@@ -2626,12 +2731,14 @@ window.addEventListener("keydown", (event) => {
     l: "measure",
     t: "template",
     p: "ping",
+    f: "fog",
     м: "select",
     и: "paint",
     у: "erase",
     д: "measure",
     е: "template",
     з: "ping",
+    а: "fog",
   };
   const nextTool = toolShortcutMap[event.code] || keyMap[key];
   if (nextTool) {

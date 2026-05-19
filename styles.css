@@ -532,6 +532,29 @@ h1 {
   background: var(--accent);
 }
 
+.fog-icon::before {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 35%, rgba(243, 234, 215, 0.48), transparent 34%),
+    radial-gradient(circle at 65% 60%, rgba(209, 168, 80, 0.55), transparent 38%),
+    #11100f;
+  border: 1px solid var(--line-strong);
+}
+
+.fog-icon::after {
+  content: "";
+  position: absolute;
+  width: 16px;
+  height: 8px;
+  left: 1px;
+  bottom: 1px;
+  border-radius: 999px;
+  background: rgba(243, 234, 215, 0.22);
+}
+
 .select-icon::before {
   content: "";
   position: absolute;
@@ -549,6 +572,19 @@ h1 {
   display: grid;
   gap: 10px;
   margin-top: 14px;
+}
+
+.fog-controls {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.fog-controls strong {
+  color: var(--ink);
+  font-weight: 700;
 }
 
 .paint-controls strong {
