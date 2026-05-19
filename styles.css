@@ -95,6 +95,13 @@ label span {
   font-size: 12px;
 }
 
+.control-label {
+  display: block;
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .app {
   min-height: 100vh;
 }
@@ -336,6 +343,63 @@ h1 {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.profile-avatar-button {
+  align-self: end;
+}
+
+.player-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.player-item {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-height: 46px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--player-color, var(--accent)) 52%, var(--line));
+  border-radius: var(--radius);
+  background: rgba(17, 16, 15, 0.42);
+}
+
+.player-item.self {
+  background: rgba(209, 168, 80, 0.1);
+}
+
+.player-avatar {
+  width: 32px;
+  height: 32px;
+  border: 2px solid var(--player-color, var(--accent));
+  border-radius: 50%;
+  object-fit: cover;
+  background: #171614;
+}
+
+.player-avatar-fallback {
+  display: grid;
+  place-items: center;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.player-name {
+  overflow: hidden;
+  color: var(--ink);
+  font-weight: 800;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-meta {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .field-grid {
@@ -589,6 +653,10 @@ h1 {
 .fog-controls strong {
   color: var(--ink);
   font-weight: 700;
+}
+
+.fog-mode-button {
+  width: 100%;
 }
 
 .paint-controls strong {

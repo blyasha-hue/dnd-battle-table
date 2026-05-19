@@ -3,6 +3,10 @@ const CLIENT_KEY = "dnd-battle-table-client-id";
 const ROOM_KEY = "dnd-battle-table-room";
 const GM_NOTES_KEY = "dnd-battle-table-gm-notes";
 const SAVE_SLOTS_KEY = "dnd-battle-table-save-slots";
+const PROFILE_KEY = "dnd-battle-table-player-profile";
+const ROLE_KEY = "dnd-battle-table-role";
+const PLAYER_TOKEN_ASSETS_KEY = "dnd-battle-table-player-token-assets";
+const PLAYER_TOOLS = new Set(["select", "ping", "measure", "template", "token"]);
 const MAP_LIMITS = {
   minCols: 8,
   maxCols: 160,
@@ -21,8 +25,15 @@ const appRoot = document.querySelector(".app");
 const els = {
   autosaveStatus: document.querySelector("#autosaveStatus"),
   topDrawerToggle: document.querySelector("#topDrawerToggle"),
+  playerViewToggle: document.querySelector("#playerViewToggle"),
   onlineStatus: document.querySelector("#onlineStatus"),
   roomInput: document.querySelector("#roomInput"),
+  profileNameInput: document.querySelector("#profileNameInput"),
+  profileRoleInput: document.querySelector("#profileRoleInput"),
+  profileColorInput: document.querySelector("#profileColorInput"),
+  profileAvatarInput: document.querySelector("#profileAvatarInput"),
+  playerList: document.querySelector("#playerList"),
+  tokenMoveModeInput: document.querySelector("#tokenMoveModeInput"),
   joinRoomBtn: document.querySelector("#joinRoomBtn"),
   copyInviteBtn: document.querySelector("#copyInviteBtn"),
   onlineHint: document.querySelector("#onlineHint"),
@@ -43,7 +54,7 @@ const els = {
   brushSizeInput: document.querySelector("#brushSizeInput"),
   brushSizeValue: document.querySelector("#brushSizeValue"),
   brushPreview: document.querySelector("#brushPreview"),
-  fogModeInput: document.querySelector("#fogModeInput"),
+  toggleFogModeBtn: document.querySelector("#toggleFogModeBtn"),
   fogSizeInput: document.querySelector("#fogSizeInput"),
   fogSizeValue: document.querySelector("#fogSizeValue"),
   coverFogBtn: document.querySelector("#coverFogBtn"),
@@ -78,6 +89,8 @@ const els = {
   selectedTokenHpInput: document.querySelector("#selectedTokenHpInput"),
   selectedTokenMaxHpInput: document.querySelector("#selectedTokenMaxHpInput"),
   selectedTokenNoteInput: document.querySelector("#selectedTokenNoteInput"),
+  selectedTokenHiddenInput: document.querySelector("#selectedTokenHiddenInput"),
+  selectedTokenOwnerInput: document.querySelector("#selectedTokenOwnerInput"),
   tokenConditionGrid: document.querySelector("#tokenConditionGrid"),
   musicUrlInput: document.querySelector("#musicUrlInput"),
   musicNameInput: document.querySelector("#musicNameInput"),
@@ -160,6 +173,7 @@ const defaultState = {
   pings: [],
   initiative: [],
   activeInitiativeId: null,
+  tokenMoveMode: "all",
   selectedTemplateShape: "circle",
   selectedTemplateSize: 20,
   selectedTemplateCenter: "cell",
@@ -180,6 +194,9 @@ let state = loadState();
 normalizeScenes(state);
 let gmNotes = safeStorageGet(localStorage, GM_NOTES_KEY) || "";
 let saveSlots = loadSaveSlots();
+let profile = loadProfile();
+let playerTokenAssets = loadPlayerTokenAssets();
+let playerViewPreview = safeStorageGet(localStorage, "dnd-battle-table-player-view-preview") === "1";
 let drag = null;
 let draftTemplate = null;
 let imageCache = new Map();
@@ -188,6 +205,10 @@ let toastTimer = null;
 let transientUrls = new Set();
 let syncTimer = null;
 let heartbeatTimer = null;
+let presenceTimer = null;
+let presencePending = false;
+let lastPresenceSent = 0;
+let lastCursor = null;
 let pingAnimationTimer = null;
 const undoStack = [];
 const UNDO_LIMIT = 20;
@@ -201,6 +222,8 @@ const sync = {
   source: null,
   applyingRemote: false,
   ready: false,
+  players: [],
+  masterClientId: null,
 };
 
 function uid(prefix) {
@@ -389,17 +412,62 @@ function tokenVisualSize(token) {
 }
 
 function tokenDisplayName(token) {
-  const asset = state.tokenAssets.find((item) => item.id === token.assetId);
+  const asset = findTokenAsset(token.assetId);
   return token.name || asset?.name?.replace(/\.[^.]+$/, "") || "Фигурка";
+}
+
+function findTokenAsset(assetId) {
+  return state.tokenAssets.find((item) => item.id === assetId) || playerTokenAssets.find((item) => item.id === assetId);
+}
+
+function currentTokenAssets() {
+  return isPlayerView() ? playerTokenAssets : state.tokenAssets;
 }
 
 function tokenConditionsList(token) {
   return Array.isArray(token.conditions) ? token.conditions.filter((id) => tokenConditions.some((item) => item.id === id)) : [];
 }
 
+function tokenMoveMode() {
+  return ["all", "owned", "master"].includes(state.tokenMoveMode) ? state.tokenMoveMode : "all";
+}
+
+function tokenOwnerName(ownerId) {
+  if (!ownerId) return "общий";
+  return sync.players.find((player) => player.id === ownerId)?.profile?.name || "игрок";
+}
+
+function canMoveMapObject(type, object) {
+  if (!isPlayerView()) return true;
+  if (type !== "token") return false;
+  if (!object || object.hidden) return false;
+  const mode = tokenMoveMode();
+  if (mode === "master") return false;
+  if (mode === "all") return true;
+  return !object.ownerId || object.ownerId === sync.clientId;
+}
+
 function selectedToken() {
   if (state.selectedObject?.type !== "token") return null;
   return state.tokens.find((token) => token.id === state.selectedObject.id) || null;
+}
+
+function selectedMapObject() {
+  if (!state.selectedObject) return null;
+  const collection = state.selectedObject.type === "token" ? state.tokens : state.handouts;
+  return collection.find((item) => item.id === state.selectedObject.id) || null;
+}
+
+function isVisibleToPlayer(object) {
+  return !object?.hidden;
+}
+
+function visibleTokens() {
+  return isPlayerView() ? state.tokens.filter(isVisibleToPlayer) : state.tokens;
+}
+
+function visibleHandouts() {
+  return isPlayerView() ? state.handouts.filter(isVisibleToPlayer) : state.handouts;
 }
 
 function initiativeSide(value) {
@@ -563,6 +631,48 @@ function loadSaveSlots() {
   }
 }
 
+function loadPlayerTokenAssets() {
+  try {
+    const parsed = JSON.parse(safeStorageGet(localStorage, PLAYER_TOKEN_ASSETS_KEY) || "[]");
+    return Array.isArray(parsed)
+      ? parsed.filter((asset) => asset?.id && asset?.src?.startsWith?.("data:image/")).slice(0, 24)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistPlayerTokenAssets() {
+  safeStorageSet(localStorage, PLAYER_TOKEN_ASSETS_KEY, JSON.stringify(playerTokenAssets.slice(0, 24)));
+}
+
+function loadProfile() {
+  try {
+    const parsed = JSON.parse(safeStorageGet(localStorage, PROFILE_KEY) || "{}");
+    const color = /^#[0-9a-f]{6}$/i.test(parsed.color || "") ? parsed.color : "#d1a850";
+    const role = safeStorageGet(localStorage, ROLE_KEY) || parsed.role || "master";
+    return {
+      name: String(parsed.name || (role === "master" ? "Мастер" : "Игрок")).slice(0, 32),
+      role: role === "player" ? "player" : "master",
+      color,
+      avatar: typeof parsed.avatar === "string" && parsed.avatar.startsWith("data:image/") ? parsed.avatar : null,
+    };
+  } catch {
+    return { name: "Мастер", role: "master", color: "#d1a850", avatar: null };
+  }
+}
+
+function saveProfile() {
+  profile = {
+    name: String(els.profileNameInput.value || "Игрок").trim().slice(0, 32) || "Игрок",
+    role: els.profileRoleInput.value === "player" ? "player" : "master",
+    color: /^#[0-9a-f]{6}$/i.test(els.profileColorInput.value) ? els.profileColorInput.value : "#d1a850",
+    avatar: profile.avatar || null,
+  };
+  safeStorageSet(localStorage, PROFILE_KEY, JSON.stringify(profile));
+  safeStorageSet(localStorage, ROLE_KEY, profile.role);
+}
+
 function persistSaveSlots() {
   safeStorageSet(localStorage, SAVE_SLOTS_KEY, JSON.stringify(saveSlots.slice(0, 6)));
 }
@@ -660,6 +770,24 @@ function setOnlineStatus(kind, text, clients = null) {
   }
 }
 
+function isMaster() {
+  return profile.role === "master" && (!sync.masterClientId || sync.masterClientId === sync.clientId);
+}
+
+function isPlayerView() {
+  return !isMaster() || playerViewPreview;
+}
+
+function canUseTool(tool = state.activeTool) {
+  return !isPlayerView() || PLAYER_TOOLS.has(tool);
+}
+
+function normalizeToolForRole() {
+  if (!canUseTool(state.activeTool)) {
+    state.activeTool = "select";
+  }
+}
+
 function roomUrl(roomId = sync.roomId) {
   const url = new URL(location.href);
   url.searchParams.set("room", cleanRoomId(roomId));
@@ -668,11 +796,93 @@ function roomUrl(roomId = sync.roomId) {
 
 function updateRoomUi() {
   els.roomInput.value = sync.roomId;
+  els.profileNameInput.value = profile.name;
+  els.profileRoleInput.value = profile.role;
+  els.profileColorInput.value = profile.color;
   if (sync.online) {
     els.onlineHint.textContent = "Отправь игрокам ссылку на эту комнату.";
   } else {
     els.onlineHint.textContent = "Открой через server.js, чтобы играть вместе.";
   }
+}
+
+function applyRoleUi() {
+  const master = isMaster();
+  const playerView = isPlayerView();
+  appRoot.classList.toggle("player-role", playerView);
+  appRoot.classList.toggle("preview-player-view", master && playerViewPreview);
+  normalizeToolForRole();
+
+  document.querySelectorAll("[data-master-only]").forEach((node) => {
+    node.hidden = playerView;
+    node.querySelectorAll?.("button, input, select, textarea").forEach((control) => {
+      control.disabled = playerView && control !== els.playerViewToggle;
+    });
+  });
+
+  document.querySelectorAll("[data-master-tool]").forEach((button) => {
+    button.hidden = playerView;
+    button.disabled = playerView;
+  });
+
+  if (els.playerViewToggle) {
+    els.playerViewToggle.hidden = !master;
+    els.playerViewToggle.disabled = false;
+    els.playerViewToggle.textContent = playerViewPreview ? "Вид мастера" : "Вид игрока";
+  }
+
+  if (playerView && ["sound"].includes(safeStorageGet(localStorage, "dnd-battle-table-drawer-tab"))) {
+    activateDrawerTab("room");
+  }
+}
+
+function renderPlayers() {
+  if (!els.playerList) return;
+  els.playerList.innerHTML = "";
+  const players = sync.players.length
+    ? sync.players
+    : [{
+      id: sync.clientId,
+      profile,
+      cursor: lastCursor,
+      updatedAt: Date.now(),
+    }];
+
+  players.forEach((player) => {
+    const item = document.createElement("div");
+    const playerProfile = player.profile || {};
+    const color = /^#[0-9a-f]{6}$/i.test(playerProfile.color || "") ? playerProfile.color : "#d1a850";
+    const role = playerProfile.role === "master" ? "Мастер" : "Игрок";
+    item.className = `player-item ${player.id === sync.clientId ? "self" : ""}`;
+    item.style.setProperty("--player-color", color);
+    item.innerHTML = `
+      ${
+        playerProfile.avatar
+          ? `<img class="player-avatar" src="${playerProfile.avatar}" alt="">`
+          : `<div class="player-avatar player-avatar-fallback">${escapeHtml((playerProfile.name || "И").slice(0, 1).toUpperCase())}</div>`
+      }
+      <div>
+        <div class="player-name">${escapeHtml(playerProfile.name || "Игрок")}</div>
+        <div class="player-meta">${role}${player.id === sync.clientId ? " · ты" : ""}</div>
+      </div>
+    `;
+    els.playerList.appendChild(item);
+  });
+}
+
+function updatePlayers(data) {
+  sync.players = Array.isArray(data.players) ? data.players : sync.players;
+  sync.masterClientId = data.masterClientId || sync.masterClientId;
+  const self = sync.players.find((player) => player.id === sync.clientId);
+  if (self?.profile?.role && self.profile.role !== profile.role) {
+    profile.role = self.profile.role;
+    safeStorageSet(localStorage, ROLE_KEY, profile.role);
+    els.profileRoleInput.value = profile.role;
+  }
+  applyRoleUi();
+  renderPlayers();
+  renderTokenDetails();
+  renderCanvas();
 }
 
 async function connectOnline() {
@@ -686,10 +896,13 @@ async function connectOnline() {
   setOnlineStatus("connecting", "Подключение");
 
   try {
-    const response = await fetch(`/api/rooms/${encodeURIComponent(sync.roomId)}`);
+    const response = await fetch(
+      `/api/rooms/${encodeURIComponent(sync.roomId)}?client=${encodeURIComponent(sync.clientId)}&role=${encodeURIComponent(profile.role)}`,
+    );
     if (!response.ok) throw new Error("Room unavailable");
     const data = await response.json();
     sync.revision = Number(data.revision || 0);
+    updatePlayers(data);
     sync.ready = true;
     if (data.state) {
       applyRemoteState(data.state, data.revision);
@@ -699,6 +912,7 @@ async function connectOnline() {
     setOnlineStatus("online", "Онлайн", Number(data.clients || 1));
     openEventStream();
     startHeartbeat();
+    startPresence();
   } catch {
     sync.ready = false;
     setOnlineStatus("offline", "Нет связи", 1);
@@ -716,13 +930,43 @@ function startHeartbeat() {
   }, 4 * 60 * 1000);
 }
 
+function startPresence() {
+  window.clearInterval(presenceTimer);
+  sendPresence();
+  presenceTimer = window.setInterval(sendPresence, 1400);
+}
+
+async function sendPresence() {
+  if (!sync.online || !sync.ready || presencePending) return;
+  presencePending = true;
+  lastPresenceSent = Date.now();
+  try {
+    const response = await fetch(`/api/rooms/${encodeURIComponent(sync.roomId)}/presence`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        clientId: sync.clientId,
+        profile,
+        cursor: lastCursor,
+      }),
+    });
+    if (response.ok) {
+      updatePlayers(await response.json());
+    }
+  } catch {
+    setOnlineStatus("connecting", "Переподключение");
+  } finally {
+    presencePending = false;
+  }
+}
+
 function openEventStream() {
   if (sync.source) {
     sync.source.close();
   }
 
   sync.source = new EventSource(
-    `/api/rooms/${encodeURIComponent(sync.roomId)}/events?client=${encodeURIComponent(sync.clientId)}`,
+    `/api/rooms/${encodeURIComponent(sync.roomId)}/events?client=${encodeURIComponent(sync.clientId)}&role=${encodeURIComponent(profile.role)}&name=${encodeURIComponent(profile.name)}&color=${encodeURIComponent(profile.color)}`,
   );
 
   sync.source.addEventListener("hello", (event) => {
@@ -730,11 +974,13 @@ function openEventStream() {
     if (data.state && Number(data.revision || 0) > sync.revision) {
       applyRemoteState(data.state, data.revision);
     }
+    updatePlayers(data);
     setOnlineStatus("online", "Онлайн", Number(data.clients || 1));
   });
 
   sync.source.addEventListener("clients", (event) => {
     const data = JSON.parse(event.data);
+    updatePlayers(data);
     setOnlineStatus("online", "Онлайн", Number(data.clients || 1));
   });
 
@@ -743,12 +989,14 @@ function openEventStream() {
     const nextRevision = Number(data.revision || 0);
     if (data.sourceClientId === sync.clientId) {
       sync.revision = Math.max(sync.revision, nextRevision);
+      updatePlayers(data);
       setOnlineStatus("online", "Онлайн", Number(data.clients || 1));
       return;
     }
     if (nextRevision > sync.revision) {
       applyRemoteState(data.state, nextRevision);
     }
+    updatePlayers(data);
     setOnlineStatus("online", "Онлайн", Number(data.clients || 1));
   });
 
@@ -771,6 +1019,7 @@ async function pushState() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         clientId: sync.clientId,
+        profile,
         revision: sync.revision,
         state: serializeState(state),
       }),
@@ -778,6 +1027,7 @@ async function pushState() {
     if (!response.ok) throw new Error("Sync failed");
     const data = await response.json();
     sync.revision = Number(data.revision || sync.revision);
+    updatePlayers(data);
     setOnlineStatus("online", "Онлайн", Number(data.clients || 1));
   } catch {
     setOnlineStatus("offline", "Нет связи");
@@ -828,7 +1078,10 @@ function syncInputs() {
   els.brushSizeInput.value = state.brushSize;
   els.brushSizeValue.textContent = state.brushSize;
   els.brushPreview.style.setProperty("--brush-preview", brushColorString());
-  els.fogModeInput.value = state.fogMode;
+  els.toggleFogModeBtn.textContent = state.fogMode === "hide" ? "Закрывать" : "Открывать";
+  els.toggleFogModeBtn.classList.toggle("danger-button", state.fogMode === "hide");
+  els.toggleFogModeBtn.classList.toggle("ghost-button", state.fogMode !== "hide");
+  els.toggleFogModeBtn.title = state.fogMode === "hide" ? "Сейчас туман закрывает клетки. Нажми, чтобы открывать." : "Сейчас туман открывает клетки. Нажми, чтобы закрывать.";
   els.fogSizeInput.value = state.fogSize;
   els.fogSizeValue.textContent = state.fogSize;
   els.templateShapeInput.value = state.selectedTemplateShape;
@@ -837,6 +1090,7 @@ function syncInputs() {
   els.templateColorInput.value = state.selectedTemplateColor;
   els.templateOpacityInput.value = state.selectedTemplateOpacity;
   els.sceneNameInput.value = state.sceneName;
+  els.tokenMoveModeInput.value = tokenMoveMode();
 
   document.querySelectorAll(".tool-button").forEach((button) => {
     button.classList.toggle("active", button.dataset.tool === state.activeTool);
@@ -845,6 +1099,7 @@ function syncInputs() {
 
 function renderAll() {
   saveActiveScene();
+  applyRoleUi();
   syncInputs();
   resizeCanvas();
   renderScenes();
@@ -853,6 +1108,7 @@ function renderAll() {
   renderTokenDetails();
   renderMusic();
   renderNotesAndSaves();
+  renderPlayers();
   renderRollLog();
   saveState();
 }
@@ -889,6 +1145,7 @@ function renderCanvas() {
   drawTokens();
   drawFog(width, height);
   drawPings();
+  drawPlayerCursors();
   drawMeasurement();
   drawSelection();
 }
@@ -934,13 +1191,13 @@ function drawFog(width, height) {
     if (x < 0 || y < 0 || x >= state.cols || y >= state.rows) return;
     const px = x * state.cell;
     const py = y * state.cell;
-    ctx.fillStyle = "rgba(3, 3, 4, 0.92)";
-    ctx.fillRect(px, py, state.cell, state.cell);
-    ctx.fillStyle = "rgba(255, 255, 255, 0.035)";
-    ctx.fillRect(px, py, state.cell, Math.max(1, state.cell * 0.08));
+    ctx.fillStyle = "#020203";
+    ctx.fillRect(px - 0.5, py - 0.5, state.cell + 1, state.cell + 1);
+    ctx.fillStyle = "#070708";
+    ctx.fillRect(px - 0.5, py - 0.5, state.cell + 1, Math.max(1, state.cell * 0.08));
   });
 
-  ctx.strokeStyle = "rgba(209, 168, 80, 0.08)";
+  ctx.strokeStyle = "rgba(209, 168, 80, 0.12)";
   ctx.lineWidth = 1;
   ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
   ctx.restore();
@@ -967,8 +1224,8 @@ function drawGrid(width, height) {
 function drawTokens() {
   const currentTurnTokens = currentInitiativeTokenIds();
   const focusTokenId = currentInitiativeFocusTokenId();
-  state.tokens.forEach((token) => {
-    const asset = state.tokenAssets.find((item) => item.id === token.assetId);
+  visibleTokens().forEach((token) => {
+    const asset = findTokenAsset(token.assetId);
     const isCurrentTurn = currentTurnTokens.has(token.id);
     const isFocusTurn = focusTokenId === token.id;
     const px = token.x * state.cell;
@@ -1008,6 +1265,10 @@ function drawTokens() {
     ctx.strokeStyle = isCurrentTurn ? "rgba(255, 248, 214, 0.96)" : "rgba(243, 234, 215, 0.85)";
     ctx.stroke();
     ctx.restore();
+
+    if (token.hidden && !isPlayerView()) {
+      drawTokenBadge("скрыт", px + footprint / 2, py + footprint / 2 - screenPx(9), "#4f8793", "center");
+    }
 
     if (token.name) {
       ctx.save();
@@ -1094,7 +1355,7 @@ function drawTokenBadge(label, x, y, color, align = "center") {
 }
 
 function drawHandouts() {
-  state.handouts.forEach((handout) => {
+  visibleHandouts().forEach((handout) => {
     const asset = state.handoutAssets.find((item) => item.id === handout.assetId);
     const px = handout.x * state.cell;
     const py = handout.y * state.cell;
@@ -1109,6 +1370,11 @@ function drawHandouts() {
     const img = getImage(asset?.src);
     if (img?.complete && img.naturalWidth) {
       drawContainImage(img, px, py, w, h);
+    }
+    if (handout.hidden && !isPlayerView()) {
+      ctx.fillStyle = "rgba(17, 16, 15, 0.48)";
+      ctx.fillRect(px, py, w, h);
+      drawTokenBadge("скрыто", px + w / 2, py + h / 2 - screenPx(9), "#4f8793", "center");
     }
     ctx.lineWidth = 2;
     ctx.strokeStyle = state.selectedObject?.id === handout.id ? "#d1a850" : "rgba(243, 234, 215, 0.75)";
@@ -1161,6 +1427,55 @@ function drawPings() {
       ctx.restore();
     });
   if (visiblePings.length) schedulePingFrame();
+}
+
+function drawPlayerCursors() {
+  if (!sync.players?.length) return;
+  const now = Date.now();
+  sync.players
+    .filter((player) => player.id !== sync.clientId && player.cursor?.sceneId === state.activeSceneId)
+    .filter((player) => now - Number(player.cursor.updatedAt || player.updatedAt || 0) < 12000)
+    .forEach((player) => {
+      const cursor = player.cursor;
+      const playerProfile = player.profile || {};
+      const color = /^#[0-9a-f]{6}$/i.test(playerProfile.color || "") ? playerProfile.color : "#d1a850";
+      const label = String(playerProfile.name || "Игрок").slice(0, 18);
+      const x = clamp(Number(cursor.x) || 0, 0, state.cols * state.cell);
+      const y = clamp(Number(cursor.y) || 0, 0, state.rows * state.cell);
+      const size = screenPx(14);
+      const fontSize = screenPx(13);
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.fillStyle = color;
+      ctx.strokeStyle = "rgba(17, 16, 15, 0.92)";
+      ctx.lineWidth = screenPx(3);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(size * 0.35, size * 1.15);
+      ctx.lineTo(size * 0.78, size * 0.72);
+      ctx.lineTo(size * 1.18, size * 0.66);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.fill();
+
+      ctx.font = `800 ${fontSize}px Inter, system-ui, sans-serif`;
+      const width = ctx.measureText(label).width + screenPx(18);
+      const height = screenPx(24);
+      const labelX = screenPx(16);
+      const labelY = screenPx(18);
+      ctx.fillStyle = "rgba(17, 16, 15, 0.9)";
+      roundRect(labelX, labelY, width, height, screenPx(7));
+      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = screenPx(1.5);
+      ctx.stroke();
+      ctx.fillStyle = "#fff2c4";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, labelX + screenPx(9), labelY + height / 2);
+      ctx.restore();
+    });
 }
 
 function schedulePingFrame() {
@@ -1523,6 +1838,16 @@ function canvasPoint(event) {
   };
 }
 
+function updateLocalCursor(point) {
+  lastCursor = {
+    x: point.x,
+    y: point.y,
+    sceneId: state.activeSceneId,
+    tool: state.activeTool,
+  };
+  if (sync.online && sync.ready && Date.now() - lastPresenceSent > 220) sendPresence();
+}
+
 function setTerrainAt(point) {
   const size = clamp(Number(state.brushSize) || 1, 1, 8);
   const offset = Math.floor((size - 1) / 2);
@@ -1565,8 +1890,9 @@ function setFogAt(point) {
 }
 
 function objectAt(point) {
-  for (let i = state.tokens.length - 1; i >= 0; i -= 1) {
-    const token = state.tokens[i];
+  const tokens = visibleTokens();
+  for (let i = tokens.length - 1; i >= 0; i -= 1) {
+    const token = tokens[i];
     const size = tokenFootprint(token);
     if (
       point.cellX >= token.x &&
@@ -1577,8 +1903,9 @@ function objectAt(point) {
       return { type: "token", object: token };
     }
   }
-  for (let i = state.handouts.length - 1; i >= 0; i -= 1) {
-    const handout = state.handouts[i];
+  const handouts = visibleHandouts();
+  for (let i = handouts.length - 1; i >= 0; i -= 1) {
+    const handout = handouts[i];
     if (
       point.cellX >= handout.x &&
       point.cellX < handout.x + handout.w &&
@@ -1604,7 +1931,7 @@ function tokenSizeInputValue() {
 }
 
 function placeToken(point) {
-  const asset = state.tokenAssets.find((item) => item.id === state.selectedTokenAssetId);
+  const asset = findTokenAsset(state.selectedTokenAssetId);
   if (!asset) {
     showToast("Сначала добавь и выбери изображение фигурки.");
     return;
@@ -1621,6 +1948,19 @@ function placeToken(point) {
     x: clamp(point.cellX, 0, Math.max(0, state.cols - size)),
     y: clamp(point.cellY, 0, Math.max(0, state.rows - size)),
   };
+  if (isPlayerView()) {
+    token.ownerId = sync.clientId;
+    token.playerCreated = true;
+    if (!state.tokenAssets.some((item) => item.id === asset.id)) {
+      state.tokenAssets.push({
+        id: asset.id,
+        name: asset.name,
+        src: asset.src,
+        ownerId: sync.clientId,
+        playerCreated: true,
+      });
+    }
+  }
   state.tokens.push(token);
   selectObject("token", token);
   showToast("Фигурка поставлена на поле.");
@@ -1649,6 +1989,13 @@ function placeHandout(point) {
 }
 
 function beginDrag(type, object, point) {
+  if (!canMoveMapObject(type, object)) {
+    const reason = tokenMoveMode() === "master"
+      ? "Токены сейчас двигает только мастер."
+      : `Этот токен закреплён за ${tokenOwnerName(object?.ownerId)}.`;
+    showToast(reason);
+    return false;
+  }
   selectObject(type, object);
   const resizing =
     type === "handout" &&
@@ -1661,6 +2008,7 @@ function beginDrag(type, object, point) {
     offsetX: point.cellX - object.x,
     offsetY: point.cellY - object.y,
   };
+  return true;
 }
 
 function moveDrag(point) {
@@ -1766,11 +2114,31 @@ function placePing(point) {
 canvas.addEventListener("pointerdown", (event) => {
   canvas.setPointerCapture(event.pointerId);
   const point = canvasPoint(event);
+  updateLocalCursor(point);
+  normalizeToolForRole();
+  if (!canUseTool()) {
+    showToast("Этот инструмент доступен мастеру.");
+    return;
+  }
   const hit = objectAt(point);
 
   if (hit && ["select", "token", "image"].includes(state.activeTool)) {
+    if (!isMaster() && hit.type !== "token") return;
+    if (!canMoveMapObject(hit.type, hit.object)) {
+      beginDrag(hit.type, hit.object, point);
+      return;
+    }
     captureUndo();
     beginDrag(hit.type, hit.object, point);
+    return;
+  }
+
+  if (!isMaster() && ["paint", "erase", "fog", "token", "image"].includes(state.activeTool)) {
+    if (state.activeTool === "token" && isPlayerView()) {
+      placeToken(point);
+      return;
+    }
+    showToast("Этот инструмент доступен мастеру.");
     return;
   }
 
@@ -1816,8 +2184,9 @@ canvas.addEventListener("pointerdown", (event) => {
 });
 
 canvas.addEventListener("pointermove", (event) => {
-  if (!drag) return;
   const point = canvasPoint(event);
+  updateLocalCursor(point);
+  if (!drag) return;
   if (drag.type === "paint") {
     setTerrainAt(point);
   } else if (drag.type === "fog") {
@@ -1896,16 +2265,20 @@ function createSceneFromCurrent(copyContent = false) {
 function renderAssets() {
   renderAssetList({
     container: els.tokenAssets,
-    assets: state.tokenAssets,
+    assets: currentTokenAssets(),
     selectedId: state.selectedTokenAssetId,
     type: "token",
   });
-  renderAssetList({
-    container: els.handoutAssets,
-    assets: state.handoutAssets,
-    selectedId: state.selectedHandoutAssetId,
-    type: "handout",
-  });
+  if (!isPlayerView()) {
+    renderAssetList({
+      container: els.handoutAssets,
+      assets: state.handoutAssets,
+      selectedId: state.selectedHandoutAssetId,
+      type: "handout",
+    });
+  } else {
+    els.handoutAssets.innerHTML = "";
+  }
 }
 
 function renderAssetList({ container, assets, selectedId, type }) {
@@ -1925,7 +2298,7 @@ function renderAssetList({ container, assets, selectedId, type }) {
       <img class="asset-thumb" src="${asset.src}" alt="">
       <div>
         <div class="asset-title">${escapeHtml(asset.name)}</div>
-        <div class="asset-meta">${type === "token" ? "Фигурка" : "Картинка"}</div>
+        <div class="asset-meta">${type === "token" ? (isPlayerView() ? "Личная фигурка" : "Фигурка") : "Картинка"}</div>
       </div>
       <span class="icon-action" aria-hidden="true">+</span>
     `;
@@ -1938,6 +2311,9 @@ function renderAssetList({ container, assets, selectedId, type }) {
         state.activeTool = "image";
       }
       renderAll();
+      if (type === "token" && isPlayerView()) {
+        showToast("Фигурка добавлена в личную библиотеку.");
+      }
       showToast(type === "token" ? "Кликни по клетке, чтобы поставить фигурку." : "Кликни по полю, чтобы показать картинку.");
     });
     container.appendChild(item);
@@ -2029,10 +2405,12 @@ function renderTokenDetails() {
   els.tokenDetailsForm.hidden = !token;
   if (!token) return;
 
+  renderTokenOwnerOptions(token);
   els.selectedTokenNameInput.value = token.name || tokenDisplayName(token);
   els.selectedTokenHpInput.value = Number.isFinite(Number(token.hp)) ? Number(token.hp) : "";
   els.selectedTokenMaxHpInput.value = Number.isFinite(Number(token.maxHp)) ? Number(token.maxHp) : "";
   els.selectedTokenNoteInput.value = token.note || "";
+  els.selectedTokenHiddenInput.checked = Boolean(token.hidden);
 
   const activeConditions = new Set(tokenConditionsList(token));
   els.tokenConditionGrid.innerHTML = "";
@@ -2054,6 +2432,29 @@ function renderTokenDetails() {
     });
     els.tokenConditionGrid.appendChild(button);
   });
+}
+
+function renderTokenOwnerOptions(token) {
+  els.selectedTokenOwnerInput.innerHTML = "";
+  const options = [
+    { value: "", label: "Общий" },
+    ...sync.players
+      .filter((player) => player.profile?.role !== "master")
+      .map((player) => ({
+        value: player.id,
+        label: player.profile?.name || "Игрок",
+      })),
+  ];
+  if (token.ownerId && !options.some((option) => option.value === token.ownerId)) {
+    options.push({ value: token.ownerId, label: tokenOwnerName(token.ownerId) });
+  }
+  options.forEach((option) => {
+    const item = document.createElement("option");
+    item.value = option.value;
+    item.textContent = option.label;
+    els.selectedTokenOwnerInput.appendChild(item);
+  });
+  els.selectedTokenOwnerInput.value = token.ownerId || "";
 }
 
 function updateSelectedToken(mutator) {
@@ -2115,20 +2516,28 @@ function addImageFiles(files, type) {
     if (!file.type.startsWith("image/")) return;
     const reader = new FileReader();
     reader.onload = () => {
-      captureUndo();
       const asset = {
         id: uid(type),
         name: file.name,
         src: reader.result,
       };
       if (type === "token") {
-        state.tokenAssets.push(asset);
+        if (isPlayerView()) {
+          asset.ownerId = sync.clientId;
+          asset.playerCreated = true;
+          playerTokenAssets = [asset, ...playerTokenAssets.filter((item) => item.id !== asset.id)].slice(0, 24);
+          persistPlayerTokenAssets();
+        } else {
+          captureUndo();
+          state.tokenAssets.push(asset);
+        }
         state.selectedTokenAssetId = asset.id;
         state.activeTool = "token";
         if (!els.tokenNameInput.value) {
           els.tokenNameInput.value = file.name.replace(/\.[^.]+$/, "").slice(0, 24);
         }
       } else {
+        captureUndo();
         state.handoutAssets.push(asset);
         state.selectedHandoutAssetId = asset.id;
         state.activeTool = "image";
@@ -2186,6 +2595,24 @@ els.selectedTokenNoteInput.addEventListener("change", (event) => {
   updateSelectedToken((token) => {
     token.note = event.target.value.trim();
   });
+});
+
+els.selectedTokenHiddenInput.addEventListener("change", (event) => {
+  updateSelectedToken((token) => {
+    token.hidden = event.target.checked;
+  });
+});
+
+els.selectedTokenOwnerInput.addEventListener("change", (event) => {
+  updateSelectedToken((token) => {
+    token.ownerId = event.target.value;
+  });
+});
+
+els.tokenMoveModeInput.addEventListener("change", (event) => {
+  state.tokenMoveMode = ["all", "owned", "master"].includes(event.target.value) ? event.target.value : "all";
+  renderAll();
+  showToast("Права движения токенов обновлены.");
 });
 
 els.mapBackgroundInput.addEventListener("change", (event) => {
@@ -2402,6 +2829,30 @@ els.roomInput.addEventListener("keydown", (event) => {
   }
 });
 
+["profileNameInput", "profileRoleInput", "profileColorInput"].forEach((id) => {
+  els[id].addEventListener("change", () => {
+    saveProfile();
+    applyRoleUi();
+    renderPlayers();
+    sendPresence();
+  });
+});
+
+els.profileAvatarInput.addEventListener("change", (event) => {
+  const [file] = event.target.files;
+  if (!file || !file.type.startsWith("image/")) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    profile.avatar = reader.result;
+    saveProfile();
+    renderPlayers();
+    sendPresence();
+    showToast("Аватар профиля обновлён.");
+  };
+  reader.readAsDataURL(file);
+  event.target.value = "";
+});
+
 els.copyInviteBtn.addEventListener("click", async () => {
   if (!sync.online) {
     showToast("Сначала запусти сервер, потом появится ссылка для игроков.");
@@ -2523,6 +2974,10 @@ document.querySelector("#rollDisBtn").addEventListener("click", () => {
 
 document.querySelectorAll(".tool-button").forEach((button) => {
   button.addEventListener("click", () => {
+    if (isPlayerView() && !PLAYER_TOOLS.has(button.dataset.tool)) {
+      showToast("Этот инструмент доступен мастеру.");
+      return;
+    }
     state.activeTool = button.dataset.tool;
     renderAll();
   });
@@ -2546,10 +3001,11 @@ els.brushSizeInput.addEventListener("input", (event) => {
   saveState();
 });
 
-els.fogModeInput.addEventListener("change", (event) => {
-  state.fogMode = event.target.value === "hide" ? "hide" : "reveal";
+els.toggleFogModeBtn.addEventListener("click", () => {
+  state.fogMode = state.fogMode === "hide" ? "reveal" : "hide";
   syncInputs();
   saveState();
+  showToast(state.fogMode === "hide" ? "Туман закрывает клетки." : "Туман открывает клетки.");
 });
 
 els.fogSizeInput.addEventListener("input", (event) => {
@@ -2639,6 +3095,13 @@ document.querySelectorAll(".drawer-tab").forEach((button) => {
   button.addEventListener("click", () => {
     activateDrawerTab(button.dataset.drawerTab);
   });
+});
+
+els.playerViewToggle.addEventListener("click", () => {
+  playerViewPreview = !playerViewPreview;
+  safeStorageSet(localStorage, "dnd-battle-table-player-view-preview", playerViewPreview ? "1" : "0");
+  renderAll();
+  showToast(playerViewPreview ? "Включён вид игрока." : "Включён вид мастера.");
 });
 
 els.sceneNameInput.addEventListener("input", (event) => {
@@ -2859,10 +3322,14 @@ window.addEventListener("keydown", (event) => {
   };
   const nextTool = toolShortcutMap[event.code] || keyMap[key];
   if (nextTool) {
+    if (isPlayerView() && !PLAYER_TOOLS.has(nextTool)) {
+      showToast("Этот инструмент доступен мастеру.");
+      return;
+    }
     state.activeTool = nextTool;
     renderAll();
   }
-  if (event.key === "Delete" && state.selectedObject) {
+  if (event.key === "Delete" && state.selectedObject && isMaster()) {
     captureUndo();
     if (state.selectedObject.type === "token") {
       state.tokens = state.tokens.filter((item) => item.id !== state.selectedObject.id);
@@ -2871,6 +3338,14 @@ window.addEventListener("keydown", (event) => {
     }
     state.selectedObject = null;
     renderAll();
+  }
+  if ((key === "h" || key === "р") && state.selectedObject && isMaster()) {
+    const object = selectedMapObject();
+    if (!object) return;
+    captureUndo();
+    object.hidden = !object.hidden;
+    renderAll();
+    showToast(object.hidden ? "Скрыто от игроков." : "Теперь видно игрокам.");
   }
 });
 

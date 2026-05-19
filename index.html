@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>D&D Battle Table</title>
-    <link rel="stylesheet" href="styles.css?v=2026-05-19-7" />
+    <link rel="stylesheet" href="styles.css?v=2026-05-19-11" />
   </head>
   <body>
     <div class="app" data-theme="ember">
@@ -18,12 +18,13 @@
         </div>
 
         <div class="top-actions" aria-label="Действия сцены">
-          <button class="ghost-button" id="exportSceneBtn" type="button">Экспорт</button>
-          <label class="ghost-button file-button">
+          <button class="ghost-button" id="playerViewToggle" type="button">Вид игрока</button>
+          <button class="ghost-button" id="exportSceneBtn" data-master-only type="button">Экспорт</button>
+          <label class="ghost-button file-button" data-master-only>
             Импорт
             <input id="importSceneInput" type="file" accept="application/json" />
           </label>
-          <button class="danger-button" id="resetSceneBtn" type="button">Сброс</button>
+          <button class="danger-button" id="resetSceneBtn" data-master-only type="button">Сброс</button>
         </div>
       </header>
 
@@ -31,7 +32,7 @@
         <div class="drawer-tabs" role="tablist" aria-label="Разделы верхнего меню">
           <button class="drawer-tab active" data-drawer-tab="room" type="button">Комната</button>
           <button class="drawer-tab" data-drawer-tab="library" type="button">Библиотеки</button>
-          <button class="drawer-tab" data-drawer-tab="sound" type="button">Звук</button>
+          <button class="drawer-tab" data-drawer-tab="sound" data-master-only type="button">Звук</button>
           <button class="drawer-tab" data-drawer-tab="notes" type="button">Заметки</button>
         </div>
 
@@ -48,15 +49,45 @@
                 <input id="roomInput" type="text" value="main" maxlength="48" />
               </label>
             </div>
+            <div class="field-grid two">
+              <label>
+                <span>Ник</span>
+                <input id="profileNameInput" type="text" value="Мастер" maxlength="32" />
+              </label>
+              <label>
+                <span>Роль</span>
+                <select id="profileRoleInput">
+                  <option value="master">Мастер</option>
+                  <option value="player">Игрок</option>
+                </select>
+              </label>
+              <label>
+                <span>Цвет</span>
+                <input id="profileColorInput" type="color" value="#d1a850" />
+              </label>
+              <label class="ghost-button file-button profile-avatar-button">
+                Аватар
+                <input id="profileAvatarInput" type="file" accept="image/*" />
+              </label>
+            </div>
             <div class="button-row">
               <button id="joinRoomBtn" type="button">Войти</button>
               <button id="copyInviteBtn" type="button">Ссылка</button>
             </div>
+            <label data-master-only>
+              <span>Движение токенов</span>
+              <select id="tokenMoveModeInput">
+                <option value="all">Игроки двигают все видимые</option>
+                <option value="owned">Игроки двигают свои и общие</option>
+                <option value="master">Только мастер</option>
+              </select>
+            </label>
             <p class="online-hint" id="onlineHint">Открой через сервер, чтобы играть вместе.</p>
             <p class="online-hint" id="connectedCount">Игроков: 1</p>
+            <div class="player-list" id="playerList" aria-label="Игроки в комнате"></div>
           </section>
 
-          <section class="panel">
+          <section class="panel" data-master-only>
             <div class="panel-heading">
               <h2>Карта</h2>
               <button class="mini-button" id="newMapBtn" type="button">Создать</button>
@@ -92,7 +123,7 @@
             </div>
           </section>
 
-          <section class="panel">
+          <section class="panel" data-master-only>
             <div class="panel-heading">
               <h2>Сцены</h2>
               <button class="mini-button" id="newSceneBtn" type="button">+</button>
@@ -137,7 +168,7 @@
             <div class="asset-list" id="tokenAssets"></div>
           </section>
 
-          <section class="panel">
+          <section class="panel" data-master-only>
             <div class="panel-heading">
               <h2>Библиотека картинок</h2>
               <label class="icon-file-button" title="Добавить картинку">
@@ -160,7 +191,7 @@
         </div>
         </div>
 
-        <div class="drawer-page" data-drawer-page="sound">
+        <div class="drawer-page" data-drawer-page="sound" data-master-only>
         <div class="drawer-grid sound-grid">
           <section class="panel music-panel-wide">
             <h2>Музыка</h2>
@@ -193,7 +224,7 @@
 
         <div class="drawer-page" data-drawer-page="notes">
         <div class="drawer-grid notes-grid">
-          <section class="panel">
+          <section class="panel" data-master-only>
             <h2>Заметки мастера</h2>
             <textarea id="gmNotesInput" class="notes-area" placeholder="Секреты, планы, НПС, ловушки..."></textarea>
             <p class="online-hint">Хранятся только в этом браузере.</p>
@@ -203,7 +234,7 @@
             <textarea id="playerNotesInput" class="notes-area" placeholder="Общие цели, имена, найденные улики..."></textarea>
             <p class="online-hint">Синхронизируются в комнате.</p>
           </section>
-          <section class="panel">
+          <section class="panel" data-master-only>
             <div class="panel-heading">
               <h2>Сохранения</h2>
               <button id="createSaveSlotBtn" class="mini-button" type="button">Сохранить</button>
@@ -239,21 +270,21 @@
                 <span class="tool-icon template-icon"></span>
                 <span>Шаблон</span>
               </button>
-              <button class="tool-button active" data-tool="paint" type="button" title="Кисть · 5">
+              <button class="tool-button active" data-tool="paint" data-master-tool type="button" title="Кисть · 5">
                 <span class="tool-icon brush-icon"></span>
                 <span>Кисть</span>
               </button>
-              <button class="tool-button" data-tool="erase" type="button" title="Ластик · 6">
+              <button class="tool-button" data-tool="erase" data-master-tool type="button" title="Ластик · 6">
                 <span class="tool-icon erase-icon"></span>
                 <span>Ластик</span>
               </button>
-              <button class="tool-button" data-tool="fog" type="button" title="Туман · 7">
+              <button class="tool-button" data-tool="fog" data-master-tool type="button" title="Туман · 7">
                 <span class="tool-icon fog-icon"></span>
                 <span>Туман</span>
               </button>
             </div>
 
-            <div class="paint-controls">
+            <div class="paint-controls" data-master-only>
               <label>
                 <span>Прозрачность: <strong id="brushOpacityValue">100%</strong></span>
                 <input id="brushOpacityInput" type="range" min="10" max="100" value="100" />
@@ -269,14 +300,11 @@
               <div class="brush-preview" id="brushPreview"></div>
             </div>
 
-            <div class="fog-controls">
-              <label>
-                <span>Туман войны</span>
-                <select id="fogModeInput">
-                  <option value="reveal">Открывать</option>
-                  <option value="hide">Закрывать</option>
-                </select>
-              </label>
+            <div class="fog-controls" data-master-only>
+              <div>
+                <span class="control-label">Туман войны</span>
+                <button id="toggleFogModeBtn" class="ghost-button fog-mode-button" type="button">Открывать</button>
+              </div>
               <label>
                 <span>Размер тумана: <strong id="fogSizeValue">3</strong></span>
                 <input id="fogSizeInput" type="range" min="1" max="12" value="3" />
@@ -326,7 +354,7 @@
             </div>
           </section>
 
-          <section class="panel initiative-panel">
+          <section class="panel initiative-panel" data-master-only>
             <div class="panel-heading">
               <h2>Инициатива</h2>
               <button class="mini-button" id="nextInitiativeBtn" type="button">След ход</button>
@@ -338,7 +366,7 @@
             <div class="initiative-list" id="initiativeList"></div>
           </section>
 
-          <section class="panel token-details-panel">
+          <section class="panel token-details-panel" data-master-only>
             <h2>Фигурка</h2>
             <div id="tokenDetailsEmpty" class="initiative-empty">Выбери фигурку на карте.</div>
             <div id="tokenDetailsForm" class="token-details-form" hidden>
@@ -360,6 +388,14 @@
               <label>
                 <span>Заметка</span>
                 <input id="selectedTokenNoteInput" type="text" maxlength="48" placeholder="Ярость, концентрация..." />
+              </label>
+              <label>
+                <span>Владелец</span>
+                <select id="selectedTokenOwnerInput"></select>
+              </label>
+              <label class="checkbox-row">
+                <input id="selectedTokenHiddenInput" type="checkbox" />
+                <span>Скрыть от игроков</span>
               </label>
             </div>
           </section>
@@ -408,6 +444,6 @@
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
     </div>
 
-    <script src="app.js?v=2026-05-19-7"></script>
+    <script src="app.js?v=2026-05-19-11"></script>
   </body>
 </html>
