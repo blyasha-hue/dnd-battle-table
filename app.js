@@ -36,6 +36,8 @@ const els = {
   tokenMoveModeInput: document.querySelector("#tokenMoveModeInput"),
   joinRoomBtn: document.querySelector("#joinRoomBtn"),
   copyInviteBtn: document.querySelector("#copyInviteBtn"),
+  forceSyncBtn: document.querySelector("#forceSyncBtn"),
+  roomStats: document.querySelector("#roomStats"),
   onlineHint: document.querySelector("#onlineHint"),
   connectedCount: document.querySelector("#connectedCount"),
   sceneTitle: document.querySelector("#sceneTitle"),
@@ -92,6 +94,8 @@ const els = {
   selectedTokenNoteInput: document.querySelector("#selectedTokenNoteInput"),
   selectedTokenHiddenInput: document.querySelector("#selectedTokenHiddenInput"),
   selectedTokenOwnerInput: document.querySelector("#selectedTokenOwnerInput"),
+  deleteSelectedTokenBtn: document.querySelector("#deleteSelectedTokenBtn"),
+  compactRoomBtn: document.querySelector("#compactRoomBtn"),
   tokenConditionGrid: document.querySelector("#tokenConditionGrid"),
   musicUrlInput: document.querySelector("#musicUrlInput"),
   musicNameInput: document.querySelector("#musicNameInput"),
@@ -203,6 +207,7 @@ let playerViewPreview = safeStorageGet(localStorage, "dnd-battle-table-player-vi
 let drag = null;
 let draftTemplate = null;
 let imageCache = new Map();
+let canvasLayoutKey = "";
 let saveTimer = null;
 let toastTimer = null;
 let transientUrls = new Set();
@@ -210,12 +215,52 @@ let syncTimer = null;
 let heartbeatTimer = null;
 let presenceTimer = null;
 let presencePending = false;
+let syncPending = false;
+let syncDirty = false;
+let imageOptimizationQueued = false;
 let lastPresenceSent = 0;
 let lastCursor = null;
 let pingAnimationTimer = null;
+let pendingCellPatch = {
+  terrainSet: {},
+  terrainDelete: new Set(),
+  fogSet: new Set(),
+  fogDelete: new Set(),
+};
+let forceFullPatchFields = new Set();
 const undoStack = [];
 const UNDO_LIMIT = 20;
 const PING_DURATION = 1600;
+const PATCH_FIELDS = [
+  "sceneName",
+  "cols",
+  "rows",
+  "cell",
+  "showGrid",
+  "background",
+  "backgroundHidden",
+  "fog",
+  "terrain",
+  "tokens",
+  "handouts",
+  "templates",
+  "measurement",
+  "pings",
+  "initiative",
+  "activeInitiativeId",
+  "initiativeRound",
+  "tokenAssets",
+  "handoutAssets",
+  "tokenMoveMode",
+  "playerNotes",
+  "rollLog",
+];
+const IMAGE_PRESETS = {
+  avatar: { maxSize: 256, quality: 0.78, mimeType: "image/webp", label: "Аватар" },
+  token: { maxSize: 720, quality: 0.82, mimeType: "image/webp", label: "Фигурка" },
+  handout: { maxSize: 1400, quality: 0.84, mimeType: "image/webp", label: "Картинка" },
+  background: { maxSize: 2400, quality: 0.86, mimeType: "image/webp", label: "Фон" },
+};
 
 const sync = {
   online: location.protocol === "http:" || location.protocol === "https:",
@@ -227,6 +272,11 @@ const sync = {
   ready: false,
   players: [],
   masterClientId: null,
+  imageSignature: "",
+  lastSyncSnapshot: null,
+  lastSyncAt: null,
+  lastPayloadBytes: 0,
+  lastPatchFields: [],
 };
 
 function uid(prefix) {
@@ -305,8 +355,72 @@ function loadImage(src) {
   });
 }
 
-async function imageFileToDataUrl(file, { maxSize = 900, quality = 0.82 } = {}) {
-  const original = await readFileAsDataUrl(file);
+function dataUrlBytes(value) {
+  if (typeof value !== "string") return 0;
+  const comma = value.indexOf(",");
+  const payload = comma >= 0 ? value.slice(comma + 1) : value;
+  return Math.round((payload.length * 3) / 4);
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 KB";
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+function textBytes(value) {
+  try {
+    return new Blob([value]).size;
+  } catch {
+    return String(value || "").length;
+  }
+}
+
+function markTerrainCell(key, value) {
+  if (forceFullPatchFields.has("terrain")) return;
+  if (value) {
+    pendingCellPatch.terrainSet[key] = structuredClone(value);
+    pendingCellPatch.terrainDelete.delete(key);
+  } else {
+    delete pendingCellPatch.terrainSet[key];
+    pendingCellPatch.terrainDelete.add(key);
+  }
+}
+
+function markFogCell(key, visible) {
+  if (forceFullPatchFields.has("fog")) return;
+  if (visible) {
+    pendingCellPatch.fogSet.add(key);
+    pendingCellPatch.fogDelete.delete(key);
+  } else {
+    pendingCellPatch.fogSet.delete(key);
+    pendingCellPatch.fogDelete.add(key);
+  }
+}
+
+function markFullPatchField(field) {
+  forceFullPatchFields.add(field);
+  if (field === "terrain") {
+    pendingCellPatch.terrainSet = {};
+    pendingCellPatch.terrainDelete.clear();
+  }
+  if (field === "fog") {
+    pendingCellPatch.fogSet.clear();
+    pendingCellPatch.fogDelete.clear();
+  }
+}
+
+function resetPendingCellPatch() {
+  pendingCellPatch = {
+    terrainSet: {},
+    terrainDelete: new Set(),
+    fogSet: new Set(),
+    fogDelete: new Set(),
+  };
+  forceFullPatchFields = new Set();
+}
+
+async function imageSrcToDataUrl(original, { maxSize = 900, quality = 0.82, mimeType = "image/webp" } = {}) {
   try {
     const img = await loadImage(original);
     const scale = Math.min(1, maxSize / Math.max(img.naturalWidth, img.naturalHeight));
@@ -318,10 +432,139 @@ async function imageFileToDataUrl(file, { maxSize = 900, quality = 0.82 } = {}) 
     canvasCtx.imageSmoothingEnabled = true;
     canvasCtx.imageSmoothingQuality = "high";
     canvasCtx.drawImage(img, 0, 0, canvasEl.width, canvasEl.height);
-    return canvasEl.toDataURL("image/jpeg", quality);
+    const compressed = canvasEl.toDataURL(mimeType, quality);
+    return dataUrlBytes(compressed) < dataUrlBytes(original) ? compressed : original;
   } catch {
     return original;
   }
+}
+
+async function imageFileToDataUrl(file, options = {}) {
+  return imageSrcToDataUrl(await readFileAsDataUrl(file), options);
+}
+
+async function compressImageFile(file, presetName) {
+  const preset = IMAGE_PRESETS[presetName] || IMAGE_PRESETS.handout;
+  const src = await imageFileToDataUrl(file, preset);
+  const before = file.size || dataUrlBytes(src);
+  const after = dataUrlBytes(src);
+  return {
+    src,
+    before,
+    after,
+    compressed: after > 0 && before > after * 1.15,
+    label: preset.label,
+  };
+}
+
+async function compressDataUrlValue(src, presetName) {
+  if (typeof src !== "string" || !src.startsWith("data:image/")) return { src, changed: false };
+  const preset = IMAGE_PRESETS[presetName] || IMAGE_PRESETS.handout;
+  const next = await imageSrcToDataUrl(src, preset);
+  return {
+    src: next,
+    changed: next !== src && dataUrlBytes(next) < dataUrlBytes(src),
+    before: dataUrlBytes(src),
+    after: dataUrlBytes(next),
+  };
+}
+
+async function optimizeCurrentImages() {
+  let changed = false;
+  const optimizeAssetList = async (assets, presetName) => {
+    if (!Array.isArray(assets)) return;
+    for (const asset of assets) {
+      const result = await compressDataUrlValue(asset.src, presetName);
+      if (!result.changed) continue;
+      asset.src = result.src;
+      changed = true;
+    }
+  };
+
+  await optimizeAssetList(state.tokenAssets, "token");
+  await optimizeAssetList(state.handoutAssets, "handout");
+  await optimizeAssetList(playerTokenAssets, "token");
+  if (state.background?.src) {
+    const result = await compressDataUrlValue(state.background.src, "background");
+    if (result.changed) {
+      state.background.src = result.src;
+      changed = true;
+    }
+  }
+  for (const scene of state.scenes || []) {
+    if (!scene.background?.src) continue;
+    const result = await compressDataUrlValue(scene.background.src, "background");
+    if (!result.changed) continue;
+    scene.background.src = result.src;
+    changed = true;
+  }
+
+  if (!changed) return false;
+  persistPlayerTokenAssets();
+  imageCache = new Map();
+  saveActiveScene();
+  safeStorageSet(localStorage, STORAGE_KEY, JSON.stringify(serializeState(state)));
+  renderAll();
+  showToast("Старые изображения в комнате сжаты.");
+  return true;
+}
+
+function optimizeCurrentImagesSoon() {
+  if (imageOptimizationQueued) return;
+  imageOptimizationQueued = true;
+  window.setTimeout(() => {
+    optimizeCurrentImages().catch(() => {}).finally(() => {
+      imageOptimizationQueued = false;
+    });
+  }, 800);
+}
+
+function collectUsedAssetIds(source = state) {
+  const tokenIds = new Set();
+  const handoutIds = new Set();
+  const collect = (tokens = [], handouts = []) => {
+    tokens.forEach((token) => {
+      if (token?.assetId) tokenIds.add(token.assetId);
+    });
+    handouts.forEach((handout) => {
+      if (handout?.assetId) handoutIds.add(handout.assetId);
+    });
+  };
+  collect(source.tokens || [], source.handouts || []);
+  (source.scenes || []).forEach((scene) => collect(scene?.tokens || [], scene?.handouts || []));
+  return { tokenIds, handoutIds };
+}
+
+function pruneUnusedAssets() {
+  const { tokenIds, handoutIds } = collectUsedAssetIds(state);
+  const beforeTokenAssets = state.tokenAssets.length;
+  const beforeHandoutAssets = state.handoutAssets.length;
+  state.tokenAssets = state.tokenAssets.filter((asset) => tokenIds.has(asset.id));
+  state.handoutAssets = state.handoutAssets.filter((asset) => handoutIds.has(asset.id));
+  if (state.selectedTokenAssetId && !state.tokenAssets.some((asset) => asset.id === state.selectedTokenAssetId)) {
+    state.selectedTokenAssetId = null;
+  }
+  if (state.selectedHandoutAssetId && !state.handoutAssets.some((asset) => asset.id === state.selectedHandoutAssetId)) {
+    state.selectedHandoutAssetId = null;
+  }
+  return {
+    tokenAssets: beforeTokenAssets - state.tokenAssets.length,
+    handoutAssets: beforeHandoutAssets - state.handoutAssets.length,
+  };
+}
+
+async function compactRoom() {
+  if (!isMaster()) return;
+  captureUndo();
+  const removed = pruneUnusedAssets();
+  state.pings = [];
+  state.rollLog = (state.rollLog || []).slice(0, 12);
+  const optimized = await optimizeCurrentImages().catch(() => false);
+  imageCache = new Map();
+  saveActiveScene();
+  renderAll();
+  const removedTotal = removed.tokenAssets + removed.handoutAssets;
+  showToast(`Комната уплотнена: удалено ассетов ${removedTotal}${optimized ? ", картинки пережаты" : ""}.`);
 }
 
 function cleanRoomId(value) {
@@ -731,6 +974,120 @@ function serializeState(source) {
   };
 }
 
+function imagePayloadSignature(source) {
+  if (!source) return "";
+  const parts = [];
+  const addAsset = (type, asset) => {
+    if (!asset?.id || typeof asset.src !== "string") return;
+    parts.push(`${type}:${asset.id}:${asset.src.length}`);
+  };
+  const addBackground = (type, background) => {
+    if (!background?.id || typeof background.src !== "string") return;
+    parts.push(`${type}:${background.id}:${background.src.length}`);
+  };
+  (source.tokenAssets || []).forEach((asset) => addAsset("token", asset));
+  (source.handoutAssets || []).forEach((asset) => addAsset("handout", asset));
+  addBackground("background", source.background);
+  (source.scenes || []).forEach((scene) => addBackground(`scene:${scene?.id || ""}`, scene?.background));
+  return parts.sort().join("|");
+}
+
+function stripImagePayload(source) {
+  const stripped = structuredClone(source);
+  const stripAsset = (asset) => {
+    if (!asset || typeof asset !== "object") return asset;
+    const next = { ...asset };
+    if (typeof next.src === "string" && next.src.startsWith("data:image/")) {
+      next.src = null;
+      next.srcOmitted = true;
+    }
+    return next;
+  };
+  const stripBackground = (background) => {
+    if (!background || typeof background !== "object") return background || null;
+    const next = { ...background };
+    if (typeof next.src === "string" && next.src.startsWith("data:image/")) {
+      next.src = null;
+      next.srcOmitted = true;
+    }
+    return next;
+  };
+  stripped.tokenAssets = (stripped.tokenAssets || []).map(stripAsset);
+  stripped.handoutAssets = (stripped.handoutAssets || []).map(stripAsset);
+  stripped.background = stripBackground(stripped.background);
+  stripped.scenes = (stripped.scenes || []).map((scene) => ({
+    ...scene,
+    background: stripBackground(scene.background),
+  }));
+  return stripped;
+}
+
+function serializeStateForSync({ forceFullImages = false } = {}) {
+  const serializable = serializeState(state);
+  const signature = imagePayloadSignature(serializable);
+  const canStripImages = !forceFullImages && Boolean(sync.imageSignature) && signature === sync.imageSignature;
+  const canPatch = canStripImages &&
+    sync.lastSyncSnapshot &&
+    sync.lastSyncSnapshot.activeSceneId === serializable.activeSceneId &&
+    Array.isArray(sync.lastSyncSnapshot.scenes) &&
+    Array.isArray(serializable.scenes) &&
+    sync.lastSyncSnapshot.scenes.length === serializable.scenes.length;
+
+  if (canPatch) {
+    const patch = {};
+    const terrainDelete = [...pendingCellPatch.terrainDelete];
+    const terrainSet = structuredClone(pendingCellPatch.terrainSet);
+    const hasTerrainCellPatch = !forceFullPatchFields.has("terrain") && (Object.keys(terrainSet).length || terrainDelete.length);
+    const fogSet = [...pendingCellPatch.fogSet];
+    const fogDelete = [...pendingCellPatch.fogDelete];
+    const hasFogCellPatch = !forceFullPatchFields.has("fog") && (fogSet.length || fogDelete.length);
+    for (const field of PATCH_FIELDS) {
+      if (field === "terrain" && hasTerrainCellPatch) {
+        patch.terrainPatch = { set: terrainSet, delete: terrainDelete };
+        continue;
+      }
+      if (field === "fog" && hasFogCellPatch) {
+        patch.fogPatch = { set: fogSet, delete: fogDelete };
+        continue;
+      }
+      if (JSON.stringify(sync.lastSyncSnapshot[field]) !== JSON.stringify(serializable[field])) {
+        patch[field] = structuredClone(serializable[field]);
+      }
+    }
+    if (
+      patch.terrain &&
+      hasTerrainCellPatch
+    ) {
+      delete patch.terrain;
+      patch.terrainPatch = { set: terrainSet, delete: terrainDelete };
+    }
+    if (
+      patch.fog &&
+      hasFogCellPatch
+    ) {
+      delete patch.fog;
+      patch.fogPatch = { set: fogSet, delete: fogDelete };
+    }
+    if (Object.keys(patch).length) {
+      return {
+        patch,
+        imageSignature: signature,
+        snapshot: serializable,
+        resetCellPatch: Boolean(patch.terrainPatch || patch.fogPatch || patch.terrain || patch.fog),
+        patchFields: Object.keys(patch),
+      };
+    }
+  }
+
+  return {
+    state: canStripImages ? stripImagePayload(serializable) : serializable,
+    imageSignature: signature,
+    snapshot: serializable,
+    resetCellPatch: true,
+    patchFields: [],
+  };
+}
+
 function captureUndo() {
   saveActiveScene();
   const snapshot = JSON.stringify(serializeState(state));
@@ -761,8 +1118,46 @@ function undoLastAction() {
   showToast("Отменено.");
 }
 
+function hydrateRemoteImages(nextState, currentState) {
+  if (!nextState || !currentState) return nextState;
+  const hydrated = structuredClone(nextState);
+  const tokenSources = new Map((currentState.tokenAssets || []).map((asset) => [asset.id, asset.src]));
+  const handoutSources = new Map((currentState.handoutAssets || []).map((asset) => [asset.id, asset.src]));
+  const backgroundSources = new Map();
+  if (currentState.background?.id && currentState.background?.src) {
+    backgroundSources.set(currentState.background.id, currentState.background.src);
+  }
+  (currentState.scenes || []).forEach((scene) => {
+    if (scene?.background?.id && scene.background.src) {
+      backgroundSources.set(scene.background.id, scene.background.src);
+    }
+  });
+
+  const hydrateAsset = (asset, sources) => {
+    if (!asset || asset.src) return asset;
+    const src = sources.get(asset.id);
+    return src ? { ...asset, src, srcOmitted: false } : asset;
+  };
+  const hydrateBackground = (background) => {
+    if (!background || background.src) return background || null;
+    const src = backgroundSources.get(background.id);
+    return src ? { ...background, src, srcOmitted: false } : background;
+  };
+
+  hydrated.tokenAssets = (hydrated.tokenAssets || []).map((asset) => hydrateAsset(asset, tokenSources));
+  hydrated.handoutAssets = (hydrated.handoutAssets || []).map((asset) => hydrateAsset(asset, handoutSources));
+  hydrated.background = hydrateBackground(hydrated.background);
+  hydrated.scenes = (hydrated.scenes || []).map((scene) => ({
+    ...scene,
+    background: hydrateBackground(scene.background),
+  }));
+  return hydrated;
+}
+
 function applyRemoteState(nextState, revision = sync.revision) {
   if (!nextState) return;
+  const previousImageSignature = imagePayloadSignature(state);
+  nextState = hydrateRemoteImages(nextState, state);
   sync.applyingRemote = true;
   const localTool = state.activeTool;
   const localSelection = state.selectedObject;
@@ -776,8 +1171,14 @@ function applyRemoteState(nextState, revision = sync.revision) {
   };
   normalizeScenes(state);
   sync.revision = Math.max(sync.revision, Number(revision || 0));
-  imageCache = new Map();
-  renderAll();
+  sync.imageSignature = imagePayloadSignature(state);
+  sync.lastSyncSnapshot = serializeState(state);
+  resetPendingCellPatch();
+  if (sync.imageSignature !== previousImageSignature) {
+    imageCache = new Map();
+  }
+  renderAll({ shouldSave: false });
+  safeStorageSet(localStorage, STORAGE_KEY, JSON.stringify(serializeState(state)));
   sync.applyingRemote = false;
 }
 
@@ -812,6 +1213,80 @@ function setOnlineStatus(kind, text, clients = null) {
   if (clients !== null) {
     els.connectedCount.textContent = `Игроков: ${clients}`;
   }
+}
+
+function ensureRoomStatsNode() {
+  if (els.roomStats) return els.roomStats;
+  if (!els.playerList?.parentElement) return null;
+  if (!els.compactRoomBtn) {
+    const controls = document.createElement("div");
+    controls.className = "button-row room-maintenance";
+    controls.setAttribute("data-master-only", "");
+    controls.innerHTML = `<button id="compactRoomBtn" type="button">Уплотнить</button>`;
+    els.playerList.parentElement.insertBefore(controls, els.playerList);
+    els.compactRoomBtn = controls.querySelector("#compactRoomBtn");
+    els.compactRoomBtn.addEventListener("click", compactRoom);
+  }
+  const node = document.createElement("div");
+  node.id = "roomStats";
+  node.className = "room-stats";
+  node.setAttribute("data-master-only", "");
+  node.setAttribute("aria-label", "Статистика комнаты");
+  els.playerList.parentElement.insertBefore(node, els.playerList);
+  els.roomStats = node;
+  return node;
+}
+
+function collectRoomStats() {
+  saveActiveScene();
+  const serializable = serializeState(state);
+  const imageSources = new Set();
+  const addImage = (src) => {
+    if (typeof src === "string" && src.startsWith("data:image/")) imageSources.add(src);
+  };
+  (serializable.tokenAssets || []).forEach((asset) => addImage(asset.src));
+  (serializable.handoutAssets || []).forEach((asset) => addImage(asset.src));
+  addImage(serializable.background?.src);
+  (serializable.scenes || []).forEach((scene) => addImage(scene?.background?.src));
+  return {
+    stateBytes: textBytes(JSON.stringify(serializable)),
+    imageBytes: [...imageSources].reduce((sum, src) => sum + dataUrlBytes(src), 0),
+    lastPayloadBytes: sync.lastPayloadBytes || 0,
+    tokens: (serializable.tokens || []).length,
+    tokenAssets: (serializable.tokenAssets || []).length,
+    handoutAssets: (serializable.handoutAssets || []).length,
+    terrainCells: Object.keys(serializable.terrain || {}).length,
+    fogCells: Object.keys(serializable.fog || {}).length,
+  };
+}
+
+function renderRoomStats() {
+  const node = ensureRoomStatsNode();
+  if (!node) return;
+  if (!isMaster()) {
+    node.hidden = true;
+    return;
+  }
+  node.hidden = false;
+  const stats = collectRoomStats();
+  const warnings = [];
+  if (stats.stateBytes > 2 * 1024 * 1024) warnings.push("state > 2 MB");
+  if (stats.imageBytes > 1536 * 1024) warnings.push("images > 1.5 MB");
+  if (stats.lastPayloadBytes > 200 * 1024) warnings.push("sync > 200 KB");
+  const patchLabel = sync.lastPatchFields.length ? sync.lastPatchFields.join(", ") : "full";
+  const syncTime = sync.lastSyncAt
+    ? new Date(sync.lastSyncAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+    : "-";
+  node.innerHTML = `
+    <div><span>State</span><strong>${formatBytes(stats.stateBytes)}</strong></div>
+    <div><span>Images</span><strong>${formatBytes(stats.imageBytes)}</strong></div>
+    <div><span>Tokens</span><strong>${stats.tokens}/${stats.tokenAssets}</strong></div>
+    <div><span>Fog</span><strong>${stats.fogCells}</strong></div>
+    <div><span>Paint</span><strong>${stats.terrainCells}</strong></div>
+    <div><span>Last sync</span><strong>${formatBytes(sync.lastPayloadBytes)} · ${syncTime}</strong></div>
+    <div class="room-stats-wide"><span>Patch</span><strong>${escapeHtml(patchLabel)}</strong></div>
+    ${warnings.length ? `<div class="room-stats-wide room-stats-warning"><span>Warning</span><strong>${escapeHtml(warnings.join(", "))}</strong></div>` : ""}
+  `;
 }
 
 function isMaster() {
@@ -950,6 +1425,7 @@ async function connectOnline() {
     sync.ready = true;
     if (data.state) {
       applyRemoteState(data.state, data.revision);
+      optimizeCurrentImagesSoon();
     } else {
       scheduleSync(20);
     }
@@ -976,11 +1452,11 @@ function startHeartbeat() {
 
 function startPresence() {
   window.clearInterval(presenceTimer);
-  sendPresence();
-  presenceTimer = window.setInterval(sendPresence, 1400);
+  sendPresence({ includeProfile: true });
+  presenceTimer = window.setInterval(() => sendPresence(), 3000);
 }
 
-async function sendPresence() {
+async function sendPresence({ includeProfile = false } = {}) {
   if (!sync.online || !sync.ready || presencePending) return;
   presencePending = true;
   lastPresenceSent = Date.now();
@@ -990,7 +1466,7 @@ async function sendPresence() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         clientId: sync.clientId,
-        profile,
+        profile: includeProfile ? profile : undefined,
         cursor: lastCursor,
       }),
     });
@@ -1051,30 +1527,50 @@ function openEventStream() {
 
 function scheduleSync(delay = 260) {
   if (!sync.online || !sync.ready) return;
+  syncDirty = true;
   window.clearTimeout(syncTimer);
   syncTimer = window.setTimeout(pushState, delay);
 }
 
-async function pushState() {
+async function pushState(options = {}) {
   if (!sync.online || !sync.ready || sync.applyingRemote) return;
+  if (syncPending) {
+    syncDirty = true;
+    return;
+  }
+  syncPending = true;
+  syncDirty = false;
+  const payloadState = serializeStateForSync(options);
+  const body = JSON.stringify({
+    clientId: sync.clientId,
+    profile,
+    revision: sync.revision,
+    state: payloadState.state,
+    patch: payloadState.patch,
+  });
   try {
     const response = await fetch(`/api/rooms/${encodeURIComponent(sync.roomId)}/state`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        clientId: sync.clientId,
-        profile,
-        revision: sync.revision,
-        state: serializeState(state),
-      }),
+      body,
     });
     if (!response.ok) throw new Error("Sync failed");
     const data = await response.json();
     sync.revision = Number(data.revision || sync.revision);
+    sync.imageSignature = payloadState.imageSignature;
+    sync.lastSyncSnapshot = structuredClone(payloadState.snapshot);
+    sync.lastPayloadBytes = textBytes(body);
+    sync.lastPatchFields = payloadState.patchFields || [];
+    sync.lastSyncAt = Date.now();
+    if (payloadState.resetCellPatch) resetPendingCellPatch();
     updatePlayers(data);
+    renderRoomStats();
     setOnlineStatus("online", "Онлайн", Number(data.clients || 1));
   } catch {
     setOnlineStatus("offline", "Нет связи");
+  } finally {
+    syncPending = false;
+    if (syncDirty) scheduleSync(80);
   }
 }
 
@@ -1094,10 +1590,14 @@ function resizeCanvas() {
   const height = state.rows * state.cell;
   const ratio = window.devicePixelRatio || 1;
   const zoom = state.zoom / 100;
-  canvas.width = Math.floor(width * ratio * zoom);
-  canvas.height = Math.floor(height * ratio * zoom);
-  canvas.style.width = `${width * zoom}px`;
-  canvas.style.height = `${height * zoom}px`;
+  const nextLayoutKey = `${width}:${height}:${ratio}:${zoom}`;
+  if (nextLayoutKey !== canvasLayoutKey) {
+    canvas.width = Math.floor(width * ratio * zoom);
+    canvas.height = Math.floor(height * ratio * zoom);
+    canvas.style.width = `${width * zoom}px`;
+    canvas.style.height = `${height * zoom}px`;
+    canvasLayoutKey = nextLayoutKey;
+  }
   ctx.setTransform(ratio * zoom, 0, 0, ratio * zoom, 0, 0);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
@@ -1141,7 +1641,7 @@ function syncInputs() {
   });
 }
 
-function renderAll() {
+function renderAll({ shouldSave = true } = {}) {
   saveActiveScene();
   applyRoleUi();
   syncInputs();
@@ -1155,7 +1655,18 @@ function renderAll() {
   renderNotesAndSaves();
   renderPlayers();
   renderRollLog();
-  saveState();
+  renderRoomStats();
+  if (shouldSave) saveState();
+}
+
+function renderBoardUpdate({ shouldSave = true } = {}) {
+  saveActiveScene();
+  syncInputs();
+  resizeCanvas();
+  renderInitiativeTracker();
+  renderTokenDetails();
+  renderRoomStats();
+  if (shouldSave) saveState();
 }
 
 function setDrawerCollapsed(collapsed) {
@@ -1907,10 +2418,10 @@ function updateLocalCursor(point) {
     sceneId: state.activeSceneId,
     tool: state.activeTool,
   };
-  if (sync.online && sync.ready && Date.now() - lastPresenceSent > 220) sendPresence();
+  if (sync.online && sync.ready && Date.now() - lastPresenceSent > 700) sendPresence();
 }
 
-function setTerrainAt(point) {
+function setTerrainAt(point, shouldSave = true) {
   const size = clamp(Number(state.brushSize) || 1, 1, 8);
   const offset = Math.floor((size - 1) / 2);
   for (let y = point.cellY - offset; y < point.cellY - offset + size; y += 1) {
@@ -1919,20 +2430,23 @@ function setTerrainAt(point) {
       const key = `${x},${y}`;
       if (state.activeTool === "erase") {
         delete state.terrain[key];
+        markTerrainCell(key, null);
       } else {
-        state.terrain[key] = {
+        const value = {
           color: state.brushColor,
           light: state.brushLight,
           opacity: state.brushOpacity,
         };
+        state.terrain[key] = value;
+        markTerrainCell(key, value);
       }
     }
   }
   renderCanvas();
-  saveState();
+  if (shouldSave) saveState();
 }
 
-function setFogAt(point) {
+function setFogAt(point, shouldSave = true) {
   const size = clamp(Number(state.fogSize) || 1, 1, 12);
   const offset = Math.floor((size - 1) / 2);
   if (!state.fog) state.fog = {};
@@ -1942,13 +2456,15 @@ function setFogAt(point) {
       const key = `${x},${y}`;
       if (state.fogMode === "hide") {
         state.fog[key] = true;
+        markFogCell(key, true);
       } else {
         delete state.fog[key];
+        markFogCell(key, false);
       }
     }
   }
   renderCanvas();
-  saveState();
+  if (shouldSave) saveState();
 }
 
 function objectAt(point) {
@@ -2152,7 +2668,7 @@ function commitDraftTemplate() {
   delete template.draft;
   state.templates.push(template);
   draftTemplate = null;
-  renderAll();
+  renderBoardUpdate();
 }
 
 function placePing(point) {
@@ -2166,10 +2682,10 @@ function placePing(point) {
       createdAt: Date.now(),
     },
   ].slice(-6);
-  renderAll();
+  renderBoardUpdate();
   window.setTimeout(() => {
     prunePings();
-    renderAll();
+    renderBoardUpdate();
   }, PING_DURATION + 80);
 }
 
@@ -2250,9 +2766,9 @@ canvas.addEventListener("pointermove", (event) => {
   updateLocalCursor(point);
   if (!drag) return;
   if (drag.type === "paint") {
-    setTerrainAt(point);
+    setTerrainAt(point, false);
   } else if (drag.type === "fog") {
-    setFogAt(point);
+    setFogAt(point, false);
   } else if (drag.type === "measure") {
     updateMeasurement(point);
   } else if (drag.type === "template") {
@@ -2476,7 +2992,7 @@ function renderInitiative() {
       captureUndo();
       state.activeInitiativeId = entry.id;
       if (token) state.selectedObject = { type: "token", id: token.id };
-      renderAll();
+      renderBoardUpdate();
     });
 
     item.querySelector(".initiative-score").addEventListener("change", (event) => {
@@ -2489,7 +3005,7 @@ function renderInitiative() {
     item.querySelector(".initiative-side-button").addEventListener("click", () => {
       captureUndo();
       entry.side = nextInitiativeSide(entry.side);
-      renderAll();
+      renderBoardUpdate();
     });
 
     item.querySelector(".initiative-remove").addEventListener("click", () => {
@@ -2541,7 +3057,7 @@ function renderInitiativeTracker() {
       captureUndo();
       state.activeInitiativeId = entry.id;
       if (token) state.selectedObject = { type: "token", id: token.id };
-      renderAll();
+      renderBoardUpdate();
     });
     els.initiativeTracker.appendChild(item);
   });
@@ -2552,6 +3068,7 @@ function renderTokenDetails() {
   els.tokenDetailsEmpty.hidden = Boolean(token);
   els.tokenDetailsForm.hidden = !token;
   if (!token) return;
+  ensureDeleteSelectedTokenButton();
 
   renderTokenOwnerOptions(token);
   els.selectedTokenNameInput.value = token.name || tokenDisplayName(token);
@@ -2576,10 +3093,38 @@ function renderTokenDetails() {
         next.add(condition.id);
       }
       token.conditions = [...next];
-      renderAll();
+      renderBoardUpdate();
     });
     els.tokenConditionGrid.appendChild(button);
   });
+}
+
+function ensureDeleteSelectedTokenButton() {
+  if (els.deleteSelectedTokenBtn || !els.tokenDetailsForm) return;
+  const button = document.createElement("button");
+  button.id = "deleteSelectedTokenBtn";
+  button.type = "button";
+  button.className = "danger-button token-delete-button";
+  button.textContent = "Удалить с карты";
+  button.addEventListener("click", deleteSelectedToken);
+  els.tokenDetailsForm.appendChild(button);
+  els.deleteSelectedTokenBtn = button;
+}
+
+function deleteSelectedToken() {
+  const token = selectedToken();
+  if (!token || !isMaster()) return;
+  if (!confirm(`Удалить "${tokenDisplayName(token)}" с карты?`)) return;
+  captureUndo();
+  state.tokens = state.tokens.filter((item) => item.id !== token.id);
+  state.initiative = state.initiative.filter((entry) => entry.tokenId !== token.id);
+  if (!state.initiative.some((entry) => entry.id === state.activeInitiativeId)) {
+    state.activeInitiativeId = state.initiative[0]?.id || null;
+  }
+  state.selectedObject = null;
+  normalizeInitiative(state);
+  renderAll();
+  showToast("Фигурка удалена с карты.");
 }
 
 function renderTokenOwnerOptions(token) {
@@ -2663,15 +3208,20 @@ function nextInitiativeTurn() {
   renderAll();
 }
 
-function addImageFiles(files, type) {
-  [...files].forEach((file) => {
-    if (!file.type.startsWith("image/")) return;
-    const reader = new FileReader();
-    reader.onload = () => {
+function showCompressionToast(result) {
+  if (!result?.compressed) return;
+  showToast(`${result.label} сжат: ${formatBytes(result.before)} -> ${formatBytes(result.after)}.`);
+}
+
+async function addImageFiles(files, type) {
+  for (const file of [...files]) {
+    if (!file.type.startsWith("image/")) continue;
+    try {
+      const result = await compressImageFile(file, type === "token" ? "token" : "handout");
       const asset = {
         id: uid(type),
         name: file.name,
-        src: reader.result,
+        src: result.src,
       };
       if (type === "token") {
         if (isPlayerView()) {
@@ -2695,9 +3245,11 @@ function addImageFiles(files, type) {
         state.activeTool = "image";
       }
       renderAll();
-    };
-    reader.readAsDataURL(file);
-  });
+      showCompressionToast(result);
+    } catch {
+      showToast("Не удалось прочитать изображение.");
+    }
+  }
 }
 
 els.tokenImageInput.addEventListener("change", (event) => {
@@ -2767,12 +3319,12 @@ els.tokenMoveModeInput.addEventListener("change", (event) => {
   showToast("Права движения токенов обновлены.");
 });
 
-els.mapBackgroundInput.addEventListener("change", (event) => {
+els.mapBackgroundInput.addEventListener("change", async (event) => {
   const [file] = event.target.files;
   if (!file || !file.type.startsWith("image/")) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    const src = reader.result;
+  try {
+    const result = await compressImageFile(file, "background");
+    const src = result.src;
     const img = new Image();
     img.onload = () => {
       captureUndo();
@@ -2802,8 +3354,9 @@ els.mapBackgroundInput.addEventListener("change", (event) => {
       showToast("Фон карты добавлен.");
     };
     img.src = src;
-  };
-  reader.readAsDataURL(file);
+  } catch {
+    showToast("Не удалось прочитать фон карты.");
+  }
   event.target.value = "";
 });
 
@@ -2979,7 +3532,7 @@ els.joinRoomBtn.addEventListener("click", () => {
     location.href = roomUrl(nextRoom);
     return;
   }
-  sendPresence();
+  sendPresence({ includeProfile: true });
   applyRoleUi();
   renderPlayers();
   showToast("Профиль применён.");
@@ -2996,22 +3549,24 @@ els.roomInput.addEventListener("keydown", (event) => {
     saveProfile();
     applyRoleUi();
     renderPlayers();
-    sendPresence();
+    sendPresence({ includeProfile: true });
   });
 });
 
-els.profileAvatarInput.addEventListener("change", (event) => {
+els.profileAvatarInput.addEventListener("change", async (event) => {
   const [file] = event.target.files;
   if (!file || !file.type.startsWith("image/")) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    profile.avatar = reader.result;
+  try {
+    const result = await compressImageFile(file, "avatar");
+    profile.avatar = result.src;
     saveProfile();
     renderPlayers();
-    sendPresence();
+    sendPresence({ includeProfile: true });
     showToast("Аватар профиля обновлён.");
-  };
-  reader.readAsDataURL(file);
+    window.setTimeout(() => showCompressionToast(result), 400);
+  } catch {
+    showToast("Не удалось прочитать аватар.");
+  }
   event.target.value = "";
 });
 
@@ -3028,6 +3583,24 @@ els.copyInviteBtn.addEventListener("click", async () => {
     window.prompt("Скопируй ссылку для игроков:", invite);
   }
 });
+
+if (els.forceSyncBtn) {
+  els.forceSyncBtn.addEventListener("click", async () => {
+    if (!sync.online || !sync.ready) {
+      showToast("Сначала подключись к комнате.");
+      return;
+    }
+    if (!isMaster()) {
+      showToast("Принудительный синк доступен мастеру.");
+      return;
+    }
+    saveActiveScene();
+    safeStorageSet(localStorage, STORAGE_KEY, JSON.stringify(serializeState(state)));
+    syncDirty = false;
+    await pushState({ forceFullImages: true });
+    showToast("Состояние комнаты отправлено.");
+  });
+}
 
 els.musicFileInput.addEventListener("change", (event) => {
   [...event.target.files].forEach((file) => {
@@ -3185,6 +3758,7 @@ els.fogSizeInput.addEventListener("input", (event) => {
 
 els.coverFogBtn.addEventListener("click", () => {
   captureUndo();
+  markFullPatchField("fog");
   state.fog = {};
   for (let y = 0; y < state.rows; y += 1) {
     for (let x = 0; x < state.cols; x += 1) {
@@ -3197,6 +3771,7 @@ els.coverFogBtn.addEventListener("click", () => {
 
 els.clearFogBtn.addEventListener("click", () => {
   captureUndo();
+  markFullPatchField("fog");
   state.fog = {};
   renderAll();
   showToast("Туман очищен.");
@@ -3349,6 +3924,8 @@ els.cellInput.addEventListener("change", () => {
 
 document.querySelector("#newMapBtn").addEventListener("click", () => {
   captureUndo();
+  markFullPatchField("terrain");
+  markFullPatchField("fog");
   state.cols = clamp(Number(els.colsInput.value) || state.cols, MAP_LIMITS.minCols, MAP_LIMITS.maxCols);
   state.rows = clamp(Number(els.rowsInput.value) || state.rows, MAP_LIMITS.minRows, MAP_LIMITS.maxRows);
   state.cell = clamp(Number(els.cellInput.value) || state.cell, MAP_LIMITS.minCell, MAP_LIMITS.maxCell);
@@ -3368,6 +3945,7 @@ document.querySelector("#newMapBtn").addEventListener("click", () => {
 
 document.querySelector("#clearPaintBtn").addEventListener("click", () => {
   captureUndo();
+  markFullPatchField("terrain");
   state.terrain = {};
   renderAll();
 });
@@ -3526,4 +4104,5 @@ window.addEventListener("beforeunload", () => {
 setDrawerCollapsed(safeStorageGet(localStorage, "dnd-battle-table-drawer-collapsed") === "1");
 activateDrawerTab(safeStorageGet(localStorage, "dnd-battle-table-drawer-tab") || "room");
 renderAll();
+optimizeCurrentImagesSoon();
 connectOnline();

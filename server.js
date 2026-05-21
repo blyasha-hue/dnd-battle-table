@@ -2,6 +2,7 @@ const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
 const { URL } = require("node:url");
+const zlib = require("node:zlib");
 
 const PORT = Number(process.env.PORT || 5173);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -10,7 +11,63 @@ const DATA_DIR = process.env.DATA_DIR || ROOT;
 const ROOMS_DIR = path.join(DATA_DIR, ".rooms");
 const MAX_BODY = 25 * 1024 * 1024;
 const PRESENCE_TTL = 45 * 1000;
+const STATE_LIMITS = {
+  maxScenes: 16,
+  maxTokens: 120,
+  maxHandouts: 80,
+  maxAssets: 80,
+  maxTemplates: 80,
+  maxPings: 8,
+  maxRolls: 20,
+  maxText: 8000,
+  maxNote: 160,
+  maxImageBytes: 650 * 1024,
+  maxBackgroundBytes: 3 * 1024 * 1024,
+};
 const PLAYER_STATE_FIELDS = new Set(["playerNotes", "pings", "measurement", "templates", "rollLog", "terrain"]);
+const MASTER_PATCH_FIELDS = new Set([
+  "sceneName",
+  "cols",
+  "rows",
+  "cell",
+  "showGrid",
+  "background",
+  "backgroundHidden",
+  "fog",
+  "terrain",
+  "tokens",
+  "handouts",
+  "templates",
+  "measurement",
+  "pings",
+  "initiative",
+  "activeInitiativeId",
+  "initiativeRound",
+  "tokenAssets",
+  "handoutAssets",
+  "tokenMoveMode",
+  "playerNotes",
+  "rollLog",
+  "terrainPatch",
+  "fogPatch",
+]);
+const SCENE_PATCH_FIELDS = new Set([
+  "cols",
+  "rows",
+  "cell",
+  "showGrid",
+  "background",
+  "backgroundHidden",
+  "fog",
+  "terrain",
+  "tokens",
+  "handouts",
+  "templates",
+  "measurement",
+  "initiative",
+  "activeInitiativeId",
+  "initiativeRound",
+]);
 const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object || {}, key);
 const TOKEN_MOVE_MODES = new Set(["all", "owned", "master"]);
 
@@ -108,6 +165,8 @@ function loadRoom(roomId) {
     revision,
     state,
     updatedAt: Date.now(),
+    persistTimer: null,
+    persistPending: false,
   };
   rooms.set(id, room);
   return room;
@@ -131,13 +190,79 @@ function persistRoom(room) {
   );
 }
 
+function schedulePersistRoom(room, delay = 1200) {
+  room.persistPending = true;
+  if (room.persistTimer) clearTimeout(room.persistTimer);
+  room.persistTimer = setTimeout(() => {
+    room.persistTimer = null;
+    room.persistPending = false;
+    persistRoom(room);
+  }, delay);
+  room.persistTimer.unref?.();
+}
+
+function persistPendingRooms() {
+  for (const room of rooms.values()) {
+    if (!room.persistPending) continue;
+    if (room.persistTimer) {
+      clearTimeout(room.persistTimer);
+      room.persistTimer = null;
+    }
+    room.persistPending = false;
+    persistRoom(room);
+  }
+}
+
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload);
-  res.writeHead(status, {
+  const headers = {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
+  };
+  sendMaybeCompressed(res, status, headers, Buffer.from(body));
+}
+
+function bufferBytes(value) {
+  return Buffer.byteLength(String(value || ""), "utf8");
+}
+
+function dataUrlBytes(value) {
+  if (typeof value !== "string") return 0;
+  const comma = value.indexOf(",");
+  const payload = comma >= 0 ? value.slice(comma + 1) : value;
+  return Math.round((payload.length * 3) / 4);
+}
+
+function cleanText(value, max = STATE_LIMITS.maxText) {
+  return String(value || "").slice(0, max);
+}
+
+function cleanDataImage(src, maxBytes = STATE_LIMITS.maxImageBytes) {
+  if (typeof src !== "string" || !src.startsWith("data:image/")) return null;
+  return dataUrlBytes(src) <= maxBytes ? src : null;
+}
+
+function sendMaybeCompressed(res, status, headers, body, req = null) {
+  const request = req || res.req;
+  const acceptsGzip = /\bgzip\b/i.test(request?.headers?.["accept-encoding"] || "");
+  if (!acceptsGzip || body.length < 1024) {
+    res.writeHead(status, headers);
+    res.end(body);
+    return;
+  }
+  zlib.gzip(body, (error, compressed) => {
+    if (error) {
+      res.writeHead(status, headers);
+      res.end(body);
+      return;
+    }
+    res.writeHead(status, {
+      ...headers,
+      "content-encoding": "gzip",
+      vary: "Accept-Encoding",
+    });
+    res.end(compressed);
   });
-  res.end(body);
 }
 
 function sendSse(client, event, data) {
@@ -148,7 +273,7 @@ function sendSse(client, event, data) {
 function broadcast(room, event, data) {
   for (const [id, client] of room.clients.entries()) {
     try {
-      const payload = event === "state" ? { ...data, state: stateForClient(room, client) } : data;
+      const payload = event === "state" ? { ...data, state: stateForClient(room, client, data.options || {}) } : data;
       sendSse(client, event, payload);
     } catch {
       room.clients.delete(id);
@@ -204,6 +329,34 @@ function playersPayload(room) {
     cursor: client.cursor || null,
     updatedAt: client.updatedAt || Date.now(),
   }));
+}
+
+function roomStatsPayload(room) {
+  const stateJson = JSON.stringify(room.state || {});
+  const imageSources = new Set();
+  const addImage = (src) => {
+    if (typeof src === "string" && src.startsWith("data:image/")) imageSources.add(src);
+  };
+  const state = room.state || {};
+  (state.tokenAssets || []).forEach((asset) => addImage(asset.src));
+  (state.handoutAssets || []).forEach((asset) => addImage(asset.src));
+  addImage(state.background?.src);
+  (state.scenes || []).forEach((scene) => addImage(scene?.background?.src));
+  return {
+    room: room.id,
+    revision: room.revision,
+    clients: room.clients.size,
+    stateBytes: bufferBytes(stateJson),
+    imageBytes: [...imageSources].reduce((sum, src) => sum + dataUrlBytes(src), 0),
+    tokens: (state.tokens || []).length,
+    tokenAssets: (state.tokenAssets || []).length,
+    handoutAssets: (state.handoutAssets || []).length,
+    terrainCells: Object.keys(state.terrain || {}).length,
+    fogCells: Object.keys(state.fog || {}).length,
+    scenes: (state.scenes || []).length,
+    updatedAt: room.updatedAt,
+    persistPending: Boolean(room.persistPending),
+  };
 }
 
 function cloneJson(value) {
@@ -397,9 +550,229 @@ function sanitizeStateForPlayer(state) {
   return sanitized;
 }
 
-function stateForClient(room, client) {
-  if (!client || client.profile?.role === "master") return room.state;
-  return sanitizeStateForPlayer(room.state);
+function stripImagePayload(state) {
+  if (!state) return state;
+  const stripped = cloneJson(state);
+  const stripAsset = (asset) => {
+    if (!asset || typeof asset !== "object") return asset;
+    const next = { ...asset };
+    if (typeof next.src === "string" && next.src.startsWith("data:image/")) {
+      next.src = null;
+      next.srcOmitted = true;
+    }
+    return next;
+  };
+  const stripBackground = (background) => {
+    if (!background || typeof background !== "object") return background || null;
+    const next = { ...background };
+    if (typeof next.src === "string" && next.src.startsWith("data:image/")) {
+      next.src = null;
+      next.srcOmitted = true;
+    }
+    return next;
+  };
+
+  stripped.tokenAssets = (stripped.tokenAssets || []).map(stripAsset);
+  stripped.handoutAssets = (stripped.handoutAssets || []).map(stripAsset);
+  stripped.background = stripBackground(stripped.background);
+  stripped.scenes = (stripped.scenes || []).map((scene) => ({
+    ...scene,
+    background: stripBackground(scene.background),
+  }));
+  return stripped;
+}
+
+function hydrateImagePayload(incomingState, baseState) {
+  if (!incomingState || !baseState) return incomingState || null;
+  const hydrated = cloneJson(incomingState);
+  const tokenSources = new Map((baseState.tokenAssets || []).map((asset) => [asset.id, asset.src]));
+  const handoutSources = new Map((baseState.handoutAssets || []).map((asset) => [asset.id, asset.src]));
+  const backgroundSources = new Map();
+  if (baseState.background?.id && baseState.background?.src) {
+    backgroundSources.set(baseState.background.id, baseState.background.src);
+  }
+  (baseState.scenes || []).forEach((scene) => {
+    if (scene?.background?.id && scene.background.src) {
+      backgroundSources.set(scene.background.id, scene.background.src);
+    }
+  });
+
+  const hydrateAsset = (asset, sources) => {
+    if (!asset || asset.src) return asset;
+    const src = sources.get(asset.id);
+    return src ? { ...asset, src, srcOmitted: false } : asset;
+  };
+  const hydrateBackground = (background) => {
+    if (!background || background.src) return background || null;
+    const src = backgroundSources.get(background.id);
+    return src ? { ...background, src, srcOmitted: false } : background;
+  };
+
+  hydrated.tokenAssets = (hydrated.tokenAssets || []).map((asset) => hydrateAsset(asset, tokenSources));
+  hydrated.handoutAssets = (hydrated.handoutAssets || []).map((asset) => hydrateAsset(asset, handoutSources));
+  hydrated.background = hydrateBackground(hydrated.background);
+  hydrated.scenes = (hydrated.scenes || []).map((scene) => ({
+    ...scene,
+    background: hydrateBackground(scene.background),
+  }));
+  return hydrated;
+}
+
+function normalizeAsset(asset, maxBytes = STATE_LIMITS.maxImageBytes) {
+  if (!asset?.id) return null;
+  const src = cleanDataImage(asset.src, maxBytes);
+  if (!src) return null;
+  return {
+    ...asset,
+    id: cleanText(asset.id, 80),
+    name: cleanText(asset.name || "Asset", 80),
+    src,
+  };
+}
+
+function normalizeToken(token) {
+  if (!token?.id || !token.assetId) return null;
+  const size = Math.min(6, Math.max(1, Math.ceil(Number(token.size) || 1)));
+  return {
+    ...token,
+    id: cleanText(token.id, 80),
+    assetId: cleanText(token.assetId, 80),
+    name: token.name ? cleanText(token.name, 40) : undefined,
+    note: token.note ? cleanText(token.note, STATE_LIMITS.maxNote) : undefined,
+    size,
+    visualSize: Math.min(size, Math.max(0.5, Number(token.visualSize) || size)),
+    x: Math.max(0, Number(token.x) || 0),
+    y: Math.max(0, Number(token.y) || 0),
+    conditions: Array.isArray(token.conditions) ? token.conditions.map((id) => cleanText(id, 40)).slice(0, 12) : [],
+  };
+}
+
+function normalizeHandout(handout) {
+  if (!handout?.id || !handout.assetId) return null;
+  return {
+    ...handout,
+    id: cleanText(handout.id, 80),
+    assetId: cleanText(handout.assetId, 80),
+    x: Math.max(0, Number(handout.x) || 0),
+    y: Math.max(0, Number(handout.y) || 0),
+    w: Math.min(80, Math.max(1, Number(handout.w) || 4)),
+    h: Math.min(80, Math.max(1, Number(handout.h) || 4)),
+  };
+}
+
+function normalizeScene(scene) {
+  if (!scene?.id) return null;
+  const normalized = {
+    ...scene,
+    id: cleanText(scene.id, 80),
+    name: cleanText(scene.name || "Сцена", 80),
+    tokens: (scene.tokens || []).map(normalizeToken).filter(Boolean).slice(0, STATE_LIMITS.maxTokens),
+    handouts: (scene.handouts || []).map(normalizeHandout).filter(Boolean).slice(0, STATE_LIMITS.maxHandouts),
+    templates: (scene.templates || []).slice(-STATE_LIMITS.maxTemplates),
+    pings: (scene.pings || []).slice(-STATE_LIMITS.maxPings),
+    initiative: (scene.initiative || []).slice(0, STATE_LIMITS.maxTokens),
+    initiativeRound: Math.max(1, Number(scene.initiativeRound) || 1),
+  };
+  if (normalized.background?.src) {
+    const src = cleanDataImage(normalized.background.src, STATE_LIMITS.maxBackgroundBytes);
+    normalized.background = src ? { ...normalized.background, src } : null;
+  }
+  return normalized;
+}
+
+function normalizeRoomState(state) {
+  if (!state) return null;
+  const normalized = cloneJson(state);
+  normalized.sceneName = cleanText(normalized.sceneName || "Сцена", 80);
+  normalized.playerNotes = cleanText(normalized.playerNotes || "", STATE_LIMITS.maxText);
+  normalized.tokenAssets = (normalized.tokenAssets || []).map((asset) => normalizeAsset(asset)).filter(Boolean).slice(0, STATE_LIMITS.maxAssets);
+  normalized.handoutAssets = (normalized.handoutAssets || []).map((asset) => normalizeAsset(asset)).filter(Boolean).slice(0, STATE_LIMITS.maxAssets);
+  normalized.tokens = (normalized.tokens || []).map(normalizeToken).filter(Boolean).slice(0, STATE_LIMITS.maxTokens);
+  normalized.handouts = (normalized.handouts || []).map(normalizeHandout).filter(Boolean).slice(0, STATE_LIMITS.maxHandouts);
+  normalized.templates = (normalized.templates || []).slice(-STATE_LIMITS.maxTemplates);
+  normalized.pings = (normalized.pings || []).slice(-STATE_LIMITS.maxPings);
+  normalized.rollLog = (normalized.rollLog || []).slice(0, STATE_LIMITS.maxRolls).map((roll) => ({
+    ...roll,
+    label: cleanText(roll?.label || "", 80),
+    detail: cleanText(roll?.detail || "", 240),
+  }));
+  normalized.initiative = (normalized.initiative || []).slice(0, STATE_LIMITS.maxTokens);
+  normalized.initiativeRound = Math.max(1, Number(normalized.initiativeRound) || 1);
+  if (normalized.background?.src) {
+    const src = cleanDataImage(normalized.background.src, STATE_LIMITS.maxBackgroundBytes);
+    normalized.background = src ? { ...normalized.background, src } : null;
+  }
+  normalized.scenes = (normalized.scenes || []).map(normalizeScene).filter(Boolean).slice(0, STATE_LIMITS.maxScenes);
+  return normalized;
+}
+
+function applyMasterPatch(baseState, patch) {
+  if (!baseState || !patch || typeof patch !== "object") return baseState || null;
+  const merged = cloneJson(baseState);
+  for (const [field, value] of Object.entries(patch)) {
+    if (!MASTER_PATCH_FIELDS.has(field)) continue;
+    if (field === "terrainPatch" || field === "fogPatch") continue;
+    merged[field] = cloneJson(value);
+  }
+
+  if (patch.terrainPatch && typeof patch.terrainPatch === "object") {
+    merged.terrain = { ...(merged.terrain || {}) };
+    for (const key of patch.terrainPatch.delete || []) {
+      delete merged.terrain[key];
+    }
+    for (const [key, value] of Object.entries(patch.terrainPatch.set || {})) {
+      merged.terrain[key] = cloneJson(value);
+    }
+  }
+
+  if (patch.fogPatch && typeof patch.fogPatch === "object") {
+    merged.fog = { ...(merged.fog || {}) };
+    for (const key of patch.fogPatch.delete || []) {
+      delete merged.fog[key];
+    }
+    for (const key of patch.fogPatch.set || []) {
+      merged.fog[key] = true;
+    }
+  }
+
+  const activeId = merged.activeSceneId;
+  const activeScene = Array.isArray(merged.scenes)
+    ? merged.scenes.find((scene) => scene?.id === activeId)
+    : null;
+  if (activeScene) {
+    if (hasOwn(patch, "sceneName")) activeScene.name = String(patch.sceneName || activeScene.name || "Сцена");
+    for (const field of SCENE_PATCH_FIELDS) {
+      if (hasOwn(patch, field)) activeScene[field] = cloneJson(patch[field]);
+    }
+    if (patch.terrainPatch) activeScene.terrain = cloneJson(merged.terrain || {});
+    if (patch.fogPatch) activeScene.fog = cloneJson(merged.fog || {});
+  }
+
+  return hydrateImagePayload(merged, baseState);
+}
+
+function imagePayloadSignature(state) {
+  if (!state) return "";
+  const parts = [];
+  const addAsset = (type, asset) => {
+    if (!asset?.id || typeof asset.src !== "string") return;
+    parts.push(`${type}:${asset.id}:${asset.src.length}`);
+  };
+  const addBackground = (type, background) => {
+    if (!background?.id || typeof background.src !== "string") return;
+    parts.push(`${type}:${background.id}:${background.src.length}`);
+  };
+
+  (state.tokenAssets || []).forEach((asset) => addAsset("token", asset));
+  (state.handoutAssets || []).forEach((asset) => addAsset("handout", asset));
+  addBackground("background", state.background);
+  (state.scenes || []).forEach((scene) => addBackground(`scene:${scene?.id || ""}`, scene?.background));
+  return parts.sort().join("|");
+}
+
+function stateForClient(room, client, options = {}) {
+  const fullState = !client || client.profile?.role === "master" ? room.state : sanitizeStateForPlayer(room.state);
+  return options.stripImages ? stripImagePayload(fullState) : fullState;
 }
 
 function readBody(req) {
@@ -442,18 +815,24 @@ function serveFile(req, res, url) {
       return;
     }
     const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, {
+    const headers = {
       "content-type": mimeTypes[ext] || "application/octet-stream",
       "cache-control": "no-cache",
-    });
-    res.end(data);
+    };
+    const compressible = /^(text\/|application\/json|text\/javascript)/.test(headers["content-type"]);
+    if (compressible) {
+      sendMaybeCompressed(res, 200, headers, data, req);
+    } else {
+      res.writeHead(200, headers);
+      res.end(data);
+    }
   });
 }
 
 function createServer() {
   return http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-  const roomMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)(?:\/(events|state|presence))?$/);
+  const roomMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)(?:\/(events|state|presence|stats))?$/);
 
   if (roomMatch) {
     const room = loadRoom(roomMatch[1]);
@@ -477,6 +856,12 @@ function createServer() {
         masterClientId: room.masterClientId,
         state: stateForClient(room, client),
       });
+      return;
+    }
+
+    if (req.method === "GET" && action === "stats") {
+      pruneStaleClients(room);
+      sendJson(res, 200, roomStatsPayload(room));
       return;
     }
 
@@ -552,12 +937,16 @@ function createServer() {
         if (role === "master" && !room.masterClientId) {
           room.masterClientId = clientId;
         }
+        const previousImageSignature = imagePayloadSignature(room.state);
         room.state = role === "master"
-          ? payload.state || null
+          ? (payload.patch ? applyMasterPatch(room.state, payload.patch) : hydrateImagePayload(payload.state, room.state))
           : mergePlayerState(room.state, payload.state, clientId);
+        room.state = normalizeRoomState(room.state);
+        const nextImageSignature = imagePayloadSignature(room.state);
+        const stripImages = previousImageSignature && previousImageSignature === nextImageSignature;
         room.revision += 1;
         room.updatedAt = Date.now();
-        persistRoom(room);
+        schedulePersistRoom(room);
         const event = {
           room: room.id,
           revision: room.revision,
@@ -566,11 +955,13 @@ function createServer() {
           clients: room.clients.size,
           players: playersPayload(room),
           masterClientId: room.masterClientId,
+          options: { stripImages },
         };
         broadcast(room, "state", event);
         sendJson(res, 200, {
           ...event,
-          state: stateForClient(room, client || { profile: { role } }),
+          options: undefined,
+          state: stateForClient(room, client || { profile: { role } }, { stripImages }),
         });
       } catch (error) {
         sendJson(res, error.message === "Body too large" ? 413 : 400, {
@@ -595,5 +986,11 @@ if (require.main === module) {
     console.log(`Open a room: http://localhost:${PORT}/?room=main`);
   });
 }
+
+process.on("beforeExit", persistPendingRooms);
+process.on("SIGTERM", () => {
+  persistPendingRooms();
+  process.exit(0);
+});
 
 module.exports = { createServer };

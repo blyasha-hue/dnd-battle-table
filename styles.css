@@ -559,6 +559,54 @@ h1 {
   line-height: 1.35;
 }
 
+.room-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.room-stats div {
+  min-width: 0;
+  padding: 6px 7px;
+  border: 1px solid rgba(209, 168, 80, 0.18);
+  border-radius: 6px;
+  background: rgba(20, 12, 8, 0.42);
+}
+
+.room-stats span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.room-stats strong {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-stats-wide {
+  grid-column: 1 / -1;
+}
+
+.room-stats-warning {
+  border-color: rgba(200, 109, 85, 0.42) !important;
+  background: rgba(92, 32, 25, 0.36) !important;
+}
+
+.room-stats-warning strong {
+  color: #ffd7c8;
+}
+
+.room-maintenance {
+  margin-top: 12px;
+}
+
 .profile-avatar-button {
   align-self: end;
 }
@@ -1276,10 +1324,17 @@ canvas {
 }
 
 .asset-delete {
-  min-width: 28px;
-  min-height: 28px;
+  min-width: 38px;
+  min-height: 38px;
+  font-size: 22px;
+  line-height: 1;
   border-color: rgba(200, 109, 85, 0.58);
   color: #ffd7c8;
+}
+
+.asset-delete:hover {
+  border-color: rgba(223, 116, 88, 0.9);
+  background: rgba(128, 38, 28, 0.42);
 }
 
 audio {
@@ -1493,6 +1548,10 @@ audio {
 
 .token-details-form input {
   min-height: 32px;
+}
+
+.token-delete-button {
+  justify-self: stretch;
 }
 
 .token-condition-grid {
